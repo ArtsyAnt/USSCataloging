@@ -1,19 +1,21 @@
-from regions import EllipseSkyRegion
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 import numpy as np
 from copy import copy
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnchoredText
+from matplotlib.patches import Ellipse as ellipse_mals
+from regions import CircleSkyRegion
 
 from astropy.table import Table, Column, MaskedColumn
 from astropy.table import vstack
 
 from astropy import units as u
 from astropy.coordinates import SkyCoord
+from astropy.coordinates import search_around_sky
 import astropy.coordinates as coord
 from astropy.io import fits
-# from astropy.table import Table
+
 """Adding ID as a required parameter for the catalog so that it can be matched to the full catalog and we regain all the info we previously lost!"""
 # idea for best guessing parameter call by doing a match case with some of its key words (but only accepts one column per parameter) 
 # would start class out to be with this best guess feature in which: (first make all uppercase .upper then) (ra: RA), (dec: DEC), (semimaj: MAJ),
@@ -21,9 +23,9 @@ from astropy.io import fits
 # (the fluxes & spec IDX might be a bit harder!)
 
 """Todo:"""
-
 """1. come up with a better way to get the required column values -- a dict call"""
-"""2. if calling from the same catalog make a copy to avoid error pop up between css and uss"""
+# done - 6/22 - adding .copy()
+# """2. if calling from the same catalog make a copy to avoid error pop up between css and uss"""
 """3. add a print final pop up for the total # of matched indexs"""
 """4. create a new line for the output images so they dont go off onto the screen, maybe just make smaller if the len is larger?"""
 # done - 6/12
@@ -40,14 +42,16 @@ class Catalog:
     # assumes that it is already called from VizieR or is a table
     # assumes that the user reordered their columns in the order of :
     # ra, dec, semimajor, semiminor, flux, peak_flux, specindex (easy to reorder with astropy)
-    def __init__(self, catalog, catalog_labels, catalog_type=None):
+    def __init__(self, catalog, catalog_labels,catalog_name =None, catalog_type=None):
         # catalog type is between "radio", "infared", "optical" and "infared"
         # initalize:
         # catalog
         # catalog type
         try:
+            # changed this night of 6/29 if there is a random issue just flip order!
+            # self.catalog = catalog.copy()
             self.catalog = catalog.filled(np.nan)
-        except AttributeError:
+        except TypeError:
             self.catalog = catalog
             
         self.type    = catalog_type
@@ -61,8 +65,7 @@ class Catalog:
         self.semiminor = catalog_labels[3]
         self.positionangle = catalog_labels[4]
         match self.type:
-            case 'uss' | 'css':
-                '''changed for scode temp'''
+            case 'uss' | 'css' | 'radio':
                 # flux
                 self.flux = catalog_labels[5]
                 # peak_flux
@@ -89,44 +92,77 @@ class Catalog:
         else:
             indexes = list(range(len(self.catalog)))
             self.catalog.add_column(indexes, name='Indexes')
+            
+        if catalog_name == None:
+            pass
+        else:
+            catalog_size = len(self.catalog)
+            name_column= catalog_size* [catalog_name]
+            self.catalog['catalog_names'] = name_column
     # have a intermediary reduction step?
     # flux ratio 
     def flux_ratio(self):
-        self.flux_ratio_ = self.catalog[self.peak_flux]/self.catalog[self.flux]
+        self.flux_ratio_ = self.catalog[self.peak_flux].value/self.catalog[self.flux].value
         self.catalog.add_column(self.flux_ratio_, name='FluxRatio')
     # baseline for all sources is that it is a compact source
     # and that none of the columns have empty spots 
     # any catalog type
     # ---
+    # dont know if I need it?
     def robust(self):
+        # if no units are given input the units we expect for these classes to run
+        self.catalog[self.ra]  = self.catalog[self.ra]*u.deg
+        self.catalog[self.dec] = self.catalog[self.dec]*u.deg
+        self.catalog[self.semimajor] = self.catalog[self.semimajor]*u.deg
+        self.catalog[self.semiminor] = self.catalog[self.semiminor]*u.deg
+        self.catalog[self.positionangle] =self.catalog[self.positionangle]*u.deg
+        self.catalog[self.flux] =self.catalog[self.flux] *u.mJy
+        self.catalog[self.peak_flux] =self.catalog[self.peak_flux] *u.mJy/u.beam
+        
         self.catalog = self.catalog
         return self.catalog
     # radio only
     # -----
-    def radio_reduction(self, alpha_threshold=None):
-        c_step_1 = self.catalog[self.catalog['FluxRatio'] <=1.1]
-        c_step_2 = c_step_1[c_step_1['FluxRatio'] >=0.8]
-        # testing s_code (the ngauss == 1 is the same)
-        c_step_3 = c_step_2[c_step_2[self.scode] =='S']
+    def radio_reduction(self, alpha_threshold=None, himes_instance=False, **kwargs):
+        self.type=kwargs.get('catalog_type', self.type)
+        if himes_instance == True:
+            c_step_1 = self.catalog[self.catalog['FluxRatio'] <=1.2]
+            # testing s_code (the ngauss == 1 is the same)
+            c_step_3 = c_step_1[c_step_1[self.scode] =='S']
+        else:
+            c_step_1 = self.catalog[self.catalog['FluxRatio'] <=1.1]
+            c_step_2 = c_step_1[c_step_1['FluxRatio'] >=0.8]
+            # testing s_code (the ngauss == 1 is the same)
+            c_step_3 = c_step_2[c_step_2[self.scode] =='S']
         # ensure spectral index exists
+        # consider not just removing
         spec_idx_mask = np.isnan(c_step_3[self.spec_index])
         c_step_4 = c_step_3[~spec_idx_mask]
         # remove all spectral index errors that are crazy!
+        # not just errors from older consider other things
         c_step_5 = c_step_4[c_step_4[self.spec_error] >-999]
 
-        # uss part
-        match self.type:
-            case 'uss':
-                alpha_threshold = -1.4
-                self.catalog = c_step_5[c_step_5[self.spec_index]< alpha_threshold]
+        if alpha_threshold != None:
+            self.catalog = c_step_5[c_step_5[self.spec_index] < alpha_threshold]
+            return self 
 
-            case 'css':
-                alpha_threshold = -1
-                self.catalog = c_step_5[c_step_5[self.spec_index]< alpha_threshold]
+        else:
+            # uss part
+            match self.type:
+                case 'uss':
+                    alpha_threshold = -1.4
+                    self.catalog = c_step_5[c_step_5[self.spec_index]< alpha_threshold]
+                    return self 
+
+
+                case 'css':
+                    alpha_threshold = -1
+                    self.catalog = c_step_5[c_step_5[self.spec_index]< alpha_threshold]
+                    return self 
 
         print(f'Sources removed: {self.inital_size-len(self.catalog)}')
         print(f'{len(self.catalog)} {self.type} candidates')
-        
+                
 # the point of this is that we can have mutiple different objects == differnt overlays
 # a overlay ultimate goal is to create a list of indexes that match between the comparision
 # catalogs with the base catalog
@@ -134,8 +170,8 @@ class Catalog:
 # we inherent the base catalogs ordered in the above way to make the calculations go quicker
 # that part requires user inputclass CatalogPositionOverlay(Catalogs):
 # calling base catalogs and comparision catalogs 
-# the base catalog should be a radio source or something with a large area
-# for two catalogs only takes about ~2 minutes (with ~200k & 7195 sources)
+# the base catalog should be a radio source beam or something with a large error area
+# for two catalogs only takes about ~30 minutes (with ~200k & 7195 sources) for matching 
 class CatalogOverlayer:
     def __init__(self, base_catalog: Catalog, comparision_catalogs: Catalog, **kwargs): 
         self.base = base_catalog
@@ -143,163 +179,153 @@ class CatalogOverlayer:
         # the number of catalogs being compared 
         '''rename'''
         self.comparision_index = len(self.comparision)
+        print(self.comparision_index )
         # size scaling for capturing within the regions area
         self.size_scale = kwargs.get('beam_scale', 1)
-    
-        # could make a attribute that follows the number of comparision catalogs
-        for index in range(self.comparision_index):
-            comparing_cat = self.comparision[index]
-            # in here we would then just call for the general dict reduction and it will be further curated by the keys in the dict
-            # change to is in keys in future
-            match comparing_cat.type:
-                case 'uss':
-                    comparing_cat.flux_ratio()
-                    comparing_cat.radio_reduction()
-            
-                case 'css':
-                    comparing_cat.flux_ratio()
-                    comparing_cat.radio_reduction()
-                case _:
-                    comparing_cat.robust()
-                    
-        # check if in ellipse
-        self.is_in_ellipse()
-        # redefine ellipse into dict and other forms 
-        self.ellipse_point_indexing()
-
+        
     # only need if the coordinate systems dont align, this should be a check to add in the ra and dec key word search
     def coordinate_matching(self):
         ...
-    # this is good for only one pairing  
-    def is_in_ellipse(self):
-        # only for ones who have the same coordinate system so be wary of that
-        # a more friendly way to do this would be to make it into a dict so
-        # there is less of an error in order
-        # 1. decompose points
-        # (make into a four loop?)
-        ra_center_ellipses  = self.base.catalog[self.base.ra]
-        dec_center_ellipses = self.base.catalog[self.base.dec]
-        # maybe have to put .unit()
-        try: 
-            semi_major_axis     = self.base.catalog[self.base.semimajor].to(u.deg)*self.size_scale
-            semi_minor_axis     = self.base.catalog[self.base.semiminor].to(u.deg)*self.size_scale
-        except:
-            semi_major_axis     = self.base.catalog[self.base.semimajor]*u.deg*self.size_scale
-            semi_minor_axis     = self.base.catalog[self.base.semiminor]*u.deg*self.size_scale
-        position_angle      = self.base.catalog[self.base.positionangle]
         
+    def is_in_ellipse_V2(self):
+        # 'complicated' but faster way to run the ellipse matching 
+        # only for ones who have the same coordinate system i.e J2000 so be wary of that
+        #  create the dict of the fermi ellipses and the values for those points after the circle reduction
+        # then loop ONLY through the sources in each fermi ellipse match to check their certainity
+        # afterwards remove the the values that are outside of actual range!
+        # Another note
+            # something I havent thought about was how to merge dicts across mutiple comparisions another dict comphresions!
+        # puts the is_in_list and radiuses array in each compared cat for later
+        # need to put this somewhere else...
+        try:
+            self.base.semi_major_ax = self.base.catalog[self.base.semimajor].to(u.deg)*self.size_scale
+            self.base.semi_minor_ax = self.base.catalog[self.base.semiminor].to(u.deg)*self.size_scale
+        except:
+            self.base.semi_major_ax = self.base.catalog[self.base.semimajor]
+            self.base.semi_minor_ax = self.base.catalog[self.base.semiminor]
+        self.base.position_angle = self.base.catalog[self.base.positionangle]
+        # take largest sep. limit from all the ellipses and use it as a catch all range
+        largest_sep_limit = max((self.base.semi_major_ax).value)
         for index in range(self.comparision_index):
-            # puts the is_in_list and radiuses array in each compared cat for later
-            self.comparision[index].is_in_list=[]
-            self.comparision[index].radiuses_from_ellipse = []
+            print(f'===={index+1} catalog overlay====')
             comparing_cat = self.comparision[index]
-            # arbritrary call just for a indexing in the base cat change to size?
-            for iteration in range(len(self.base.catalog[self.base.ra])):
-                
-                ra_points = comparing_cat.catalog[comparing_cat.ra]
-                dec_points = comparing_cat.catalog[comparing_cat.dec]
-                
+            # the inital masking (with skycoord uses k-tree matching so faster?!
+            robust_comparision_coords = SkyCoord(ra=comparing_cat.catalog[comparing_cat.ra], dec=comparing_cat.catalog[comparing_cat.dec])
+            robust_base_coords = SkyCoord(ra=self.base.catalog[self.base.ra], dec=self.base.catalog[self.base.dec])
+            idx_tar, idx_catal, _, _ = search_around_sky(robust_comparision_coords, robust_base_coords, seplimit=largest_sep_limit*u.deg)
+
+            # for loop for each key and adding it from its base value
+            ellipses_dict = {}
+            keys = list(set(idx_catal))
+            for key in keys:
+                ellipses_dict[key] = []
+            for matched_base_idx, matched_tar_idx in zip(idx_catal, idx_tar):
+                ellipses_dict[matched_base_idx].append(matched_tar_idx)    
+            
+            print('circle-reduction')
+            print(f'Remaining point matches {len(comparing_cat.catalog[idx_tar])}')
+            print(f'Remaining ellipses {len(self.base.catalog[list(set(idx_catal))])}')
+            
+        # self.comparision[index].is_in_list=[]
+            self.comparision[index].ellipse_point_index = ellipses_dict 
+            self.comparision[index].radiuses_from_ellipse = []
+            ra_ellipses  = self.base.catalog[self.base.ra]
+            dec_ellipses = self.base.catalog[self.base.dec]
+            # arbritrary call just for a indexing in the reduced ellipses 
+            for iteration in list(ellipses_dict.keys()):
                 # 2. defining ra as x and dec as y
-                x_distances_from_center = ra_points  - ra_center_ellipses[iteration]*u.deg
-                y_distances_from_center = dec_points - dec_center_ellipses[iteration]*u.deg
-                
+                ra_points = comparing_cat.catalog[comparing_cat.ra][ellipses_dict[iteration]]
+                dec_points = comparing_cat.catalog[comparing_cat.dec][ellipses_dict[iteration]]
+                # it was causing a error cause self.basesemimajor is not the same size as the ellipse regions since they are looping @180
+                x_distances_from_center = ra_points  - ra_ellipses[iteration]
+                y_distances_from_center = dec_points - dec_ellipses[iteration]
                 # 3. define angles since we are using it reverse should be reversed
-                theta = np.radians(position_angle[iteration]*u.deg)
+                theta = np.radians(self.base.position_angle[iteration])
                 cos = np.cos(theta)
                 sin = np.sin(theta)
-                
                 # 4. get rotated x and y 
                 x_rotated = x_distances_from_center * cos - y_distances_from_center *sin
                 y_rotated = x_distances_from_center * sin + y_distances_from_center *cos
-                    
                 # 5.check if and y_rot are in the ellipse equation and make a append
-                radius = (x_rotated**2/(semi_major_axis[iteration])**2)+ ((y_rotated**2)/(semi_minor_axis[iteration])**2)       
-                
+                radius = (x_rotated**2/(self.base.semi_major_ax[iteration])**2)+ ((y_rotated**2)/(self.base.semi_minor_ax[iteration])**2)       
                 # 6. append radius of all mals sources to fermi ellipse [i]
                 self.comparision[index].radiuses_from_ellipse.append(radius)
-                self.comparision[index].is_in_list.append((radius<=1))
-                # why would any one realistically want just the boolean
-        # does it need to return anything?
+                # 7. do a dict/ls comphrension of source if val in radius is <=1
+            # print(len(self.comparision[index].radiuses_from_ellipse))
+        for index in range(self.comparision_index):
+            # return every individual comparision catalog index match from its whole value list to respective key
+            # only if the matching index radii in the iteration's radius is <=1
+            # loops for the given key, value_list_array, and radius_array 
+            ellipses_dict = {key: [match for indexes, match in enumerate(match_list) if radius[indexes]<=1]
+                             for key, match_list, radius
+                             in zip(self.comparision[index].ellipse_point_index.keys(), self.comparision[index].ellipse_point_index.values(), self.comparision[index].radiuses_from_ellipse)}
+            # to remove the empty keys with just []
+            ellipses_dict = {key: matches for key, matches in ellipses_dict.items() if matches}
+            self.comparision[index].ellipse_point_index = ellipses_dict
+            # at this point I am getting the indexes of the catalogs for the fermi
+        #  the comparision class instances 
+        # should it return just the dictionaries since that is what it is doing 
         return  self.comparision
-
-    # creates a dict of the ellipse, pointing relationship, and a index for all the matched points
-    # does this for all compared catalogs
-    def ellipse_point_indexing(self):
-        # self.comparision_index and index is hard to read!
-        for index in range(self.comparision_index):
-            comparing_cat = self.comparision[index]
-            
-            major_indices = [ellipse_index for ellipse_index,
-                             ellipse in enumerate(comparing_cat.is_in_list) if any(ellipse)]
-            
-            # I have a radiuses array should I include it in output?
-            # radiuses_array = np.array(radiuses_from_ellipse)[major_indices]
-            
-            # array of the ellipses that have atleast one point within it.
-            filtered_list = np.array(comparing_cat.is_in_list)[major_indices]
-            
-            # change later there are better sub filter algos
-            # basic algo. to sort the ellipse index value in fermi catalog to the index of the point
-            self.comparision[index].ellipse_point_index = {}
-            self.comparision[index].point_all_indexes   = []
-            self.comparision[index].ellipse_indexes     = major_indices
-            j=0
-            for ellipse in filtered_list:
-                point_indices = []
-                index_num = 0 
-                # iterates to see if the index number is in the ellipse 
-                # Im going to change it so that it will be linked to the actual inital index so that no matter what the indexes can match
-                # that way the indexes that are held onto can correlate across similar catalogs easier!
-                for indice in ellipse:
-                    if indice == True:
-                        # this will input the inital indexes to transfer across catalogs!
-                        # point_indices.append(comparing_cat.catalog['Indexes'][index_num])
-                        point_indices.append(index_num)
-
-                        self.comparision[index].point_all_indexes.append(index_num)
-                        index_num +=1
-                    else:
-                        index_num +=1
-                        
-                self.comparision[index].ellipse_point_index[major_indices[j]] = point_indices
-                j+=1
-        # return self.comparision
-
-# you asked for the matched catalogs back >:)
-    def matched_catalogs(self):
-        all_matched_ellipses = []
-        ellipse_point_dicts  = []
-        reduced_compared_cats = []
         
-        # get indexes and reduces catalogs to only be the matching ones 
+# you asked for the matched catalogs back >:)
+# will only return the matched catalogs unless you ask for the 'parent' catalogs for base and comparision to do wider matching with the indexes 
+    def matched_catalogs_V2(self, return_parent_catalogs=False):
+        ellipse_point_dicts        = []
+        reduced_compared_cats      = []
+        unreduced_comparision_cats = []
+        base_catalogs              = []
+         # get indexes and reduces catalogs to only be the matching ones 
         for index in range(self.comparision_index):
-            ellipse_indexes = self.comparision[index].ellipse_indexes
-            point_indexes   =  self.comparision[index].point_all_indexes
-            ellipse_point_dict = self.comparision[index].ellipse_point_index
+            # pull the matches of just the ellipses/keys
+            ellipses= list(self.comparision[index].ellipse_point_index.keys())
+            # pull the matches of all the points for comp catalogs
+            point_indexes = [*self.comparision[index].ellipse_point_index.values()]
+            point_indexes = [index for index_list in point_indexes for index in index_list]
+            # the individual dictonaries per iteration
+            # print(self.comparision[index].ellipse_point_index)
             
+            # since it is a local reduction the index is a local positional match for the comparisions cats.
             reduced_compared_cat = self.comparision[index].catalog[point_indexes]
             reduced_compared_cats.append(reduced_compared_cat)
-            
+            ellipse_point_dict = self.comparision[index].ellipse_point_index
             ellipse_point_dicts.append(ellipse_point_dict)
-            all_matched_ellipses.append(ellipse_indexes)
+            # append all the unassoc ellipses(before doing the reduction, so you can properly index into them across catalogs)
+            
+            base_catalogs.append(self.base.catalog[ellipses])
+            unreduced_comparision_cats.append(self.comparision[index].catalog)
+            
+        
+        # all the catalogs the dicts were generated from
             
         # now append_reduced catalogs
-        self.base_matched_catalog        = self.base.catalog[all_matched_ellipses]
+        self.base_matched_catalogs       = base_catalogs
         self.comparision_matched_catalog = reduced_compared_cats
         self.dict_match                  = ellipse_point_dicts
         
-        # returns: matched_base_catalog, [a single list?]
+        # returns: matched_base_catalogs, [a list of tables, one per each comparision] that are only the matching ellipses
         # matched compared cat [a list]
         # dict of all ellipse - idx per catalog [a list]
         # and the first catalog without the matching THIS IS TEMP
-        return self.base_matched_catalog, self.comparision_matched_catalog, self.dict_match, self.comparision[0].catalog
+        if return_parent_catalogs == False:
+            return self.base_matched_catalogs, self.comparision_matched_catalog, self.dict_match
+        else:
+            comparision_cat = []
+            for index in range(self.comparision_index):
+                comparision_cat.append(self.comparision[index].catalog)
+                # check if this ruins anythin
+            self.comparision_catalogs = comparision_cat
+            return self.base_matched_catalogs, self.comparision_matched_catalog, self.dict_match, self.base.catalog, self.comparision_catalogs
     
+
 # something to visualize the catalog overlay in different ways?
 class Multicatalogvisual():
     ...
+    # think of how to general the base plotting with subploting features to look at individual sources
+    # and how to look at all sources with varible features from spec index etc.
 # make a function that will plt the values of the scatter in that region and the patch
 
-'''UPDATE TO CONSIDER THE INDEXES FROM THE BASE CATALOG!'''
+# done 6-15
+# '''UPDATE TO CONSIDER THE INDEXES FROM THEIR BASE CATALOG!'''
 def fermi_plot(ellipse, ellipse_indexes, point_catalog, point_indexes):
     # can add the CSS_indexes later
     fig = plt.figure(figsize=(12,12))
@@ -358,54 +384,111 @@ def fermi_plot(ellipse, ellipse_indexes, point_catalog, point_indexes):
 
     plt.savefig('fermi_ellipse_example.jpg', dpi=300)
     plt.show()
-    # change x ticks to degs or hours
+    # change x ticks to have ^degs or hours
 
-def spectral_window_merging(base_window, overlapping_window, matched_dict):
-  # indicies seperation
-  base_window_new = base_window.copy()
-  keys_list = list(matched_dict.keys())
-  comparision_spw_indices = []
-  for spw_index in keys_list:
-      comparision_spw_indices.append(matched_dict[spw_index][0])
-      
-  # call any index really
-  Spectral_window_type = overlapping_window['SPW/WB'][0]
-  column_length        = len(base_window)
-  empty_data           = np.zeros(column_length)
-  
-  # all the empty columns
-  flux      = MaskedColumn(empty_data, name = f'Flux_{Spectral_window_type}').filled(np.nan)
-  Peak_flux = MaskedColumn(empty_data, name = f'FluxPk_{Spectral_window_type}')
-  Spw_fit   = MaskedColumn(empty_data, name = f'Spwfit_{Spectral_window_type}')
-  Spw_efit  = MaskedColumn(empty_data, name = f'e_Spwfit_{Spectral_window_type}')
+# combines a base spectral window source with any other number of spectral windows given that the dictionary call was base to all
+def spectral_window_merging_V2(base_window, overlapping_windows, matched_dict): 
+    # is hardcoding the labels from the full mals cat
+    # still dont get this function issues as much as I should 
+    # # indicies seperation
+    # get the base catalog 
+    base_window_new = base_window.copy()
+    # merge all the overlapping window catalogs 
+    keys_list = list(matched_dict.keys())
+    # this gets all of the indicies 
+    comparision_spw_indices = []
+    for spw_index in keys_list:
+        # worried about this [0]
+        comparision_spw_indices.append(matched_dict[spw_index][0])
+        
+    # take in all the spectral windows names for the overlapping windows 
+    Spectral_window_types = list(set(overlapping_windows['spw_id']))
+    column_length        = len(base_window_new)
+    empty_data           = np.zeros(column_length)
 
-  #   # get overlap for all indexes
-  #   overlap = np.zeros(len(base_window)+len(overlapping_window), dtype=bool)
-  #   overlap[comparision_spw_indices] = True
-      
-  mask = np.ones(len(overlapping_window), dtype=bool)
-  mask[comparision_spw_indices] = False
-  unique_sources = overlapping_window[mask] 
-  for index in range(len(keys_list)):
-      flux[keys_list[index]] = overlapping_window['Flux'][comparision_spw_indices[index]]
-      Peak_flux[keys_list[index]] = overlapping_window['FluxPk'][comparision_spw_indices[index]]
-      Spw_fit[keys_list[index]] = overlapping_window['Spwfit'][comparision_spw_indices[index]]
-      Spw_efit[keys_list[index]] = overlapping_window['e_Spwfit'][comparision_spw_indices[index]]
-# for some reason failed when i assigned it to a catalog, catalog calling issue.
-  try:
-      base_window_new.add_columns([flux,Peak_flux,Spw_fit,Spw_efit])
-  except:
-      base_window_new = base_window_new
-    #   print(f'Unique source catalog {unique_sources} ')
-  unique_detections = vstack([base_window_new, unique_sources], join_type='outer')
-  # unique_detections.add_column(overlap, name='Spw_overlap')
-  return unique_detections
+    # add empty/nan columns for all the expected windows into the base window
+    # get the units of the overlaping_window
+    flux_unit = overlapping_windows['total_flux'].unit
+    flux_err_unit = overlapping_windows['total_flux_e'].unit
+    freq_unit = overlapping_windows['ref_freq'].unit
 
+
+    for i in range(len(Spectral_window_types)):
+        flux      = Column(empty_data.copy(), name = f'Flux_{Spectral_window_types[i]}', dtype=float, unit=flux_unit)
+        flux_err  = Column(empty_data.copy(), name = f'Flux_Error_{Spectral_window_types[i]}', dtype=float, unit=flux_err_unit)
+    #   Peak_flux = MaskedColumn(empty_data.copy(), name = f'FluxPk_{Spectral_window_types[i]}', dtype=float, unit=peak_flux_unit)
+        freq      = Column(empty_data.copy(), name = f'Freq_{Spectral_window_types[i]}', dtype=float, unit=freq_unit)
+        s_code    = Column(empty_data.copy(), name = f'Scode_{Spectral_window_types[i]}', dtype=str)
+    #   n_gauss   = MaskedColumn(empty_data.copy(), name = f'Ngauss_{Spectral_window_types[i]}', dtype=float)
+    # maybe call the global index as well
+        base_window_new.add_columns([flux, flux_err, freq, s_code,])
+
+    # will get the spw label for any source and append it to the right object 
+    for index in keys_list:
+        # get the values 
+        spw_values = matched_dict[index]
+        for spw_value in spw_values:
+            spw = overlapping_windows[spw_value]['spw_id']
+            base_window_new[f'Flux_{spw}'][index] = overlapping_windows[spw_value]['total_flux']
+            base_window_new[f'Flux_Error_{spw}'][index] = overlapping_windows[spw_value]['total_flux_e']
+            base_window_new[f'Freq_{spw}'][index] = overlapping_windows[spw_value]['ref_freq']
+            base_window_new[f'Scode_{spw}'][index] = overlapping_windows[spw_value]['s_code']
+    
+    mask = np.ones(len(overlapping_windows), dtype=bool)
+    mask[comparision_spw_indices] = False
+    unique_sources = overlapping_windows[mask] 
+
+    return base_window_new, unique_sources
 
 # I will make a function that will always convert the individual indexing to a 'global' indexing'!
 # just uses the dict comprehension, this allows the indexes to act as
 # connecting point between steps in catalog reduction if there are intermediary steps in mutiple catalog calls for same base!
-def global_index(dict, dict_catalog):
-    dict_global = {key: [dict_catalog['Indexes'][value] for value in value_list] 
-                   for key, value_list in dict.items()}
+
+# e.g. if you have mutiple catalogs that you reduced, each will have a global index,
+# for dict_catalog you would call the 
+def global_index(dict, dict_catalog, keys_global=None):
+    if keys_global != None:
+        dict_global = {keys_global['Indexes'][key]: [dict_catalog['Indexes'][value] for value in value_list] 
+                       for key, value_list in dict.items()}
+    else:
+        dict_global = {key: [dict_catalog['Indexes'][value] for value in value_list] 
+                       for key, value_list in dict.items()}
+    
     return dict_global
+            
+# this is good for only one pairing  
+def ellipse(ellipse_names, ellipse_catalog):
+    # hardcoded not actually good for anyting but fermi!
+    mask = np.isin(ellipse_catalog['Source_Name'], ellipse_names)        
+    ellipse_catalog_position = ellipse_catalog[mask]
+    print(ellipse_catalog_position)
+    # for each ellipse make the actual ellipse structure and use it to call 
+    # this will also nullify the need to create the ellipses in 
+    # defining the ellipses/circle attributes
+    # the reason why it wasnt working on 6/18 is because the wrapping and negative!
+    ra_ellipse = coord.Angle(ellipse_catalog_position['RAJ2000'])
+    ra_ellipse = - ra_ellipse
+    ra_reordered_ellipse = ra_ellipse.wrap_at(180*u.deg)
+    dec_ellipse = coord.Angle(ellipse_catalog_position['DEJ2000'])
+
+    semi_major = ellipse_catalog_position['Conf_95_SemiMajor']
+    semi_minor = ellipse_catalog_position['Conf_95_SemiMinor']
+    pa = ellipse_catalog_position['Conf_95_PosAng']
+    
+    # making all ellipses (matplotlib version) (required to actually plot the ellipses in deg in the end)
+    # only way to plot it is if it is 'dimensionless' I know under the hood it is degs
+    ellipse_patches = []
+    for i in range(len(ellipse_catalog_position['RAJ2000'])):
+            ellipses_patch = ellipse_mals((ra_reordered_ellipse[i].value, dec_ellipse[i].value),  width=semi_major[i].value*2,  height=semi_minor[i].value*2, angle=pa[i].value, lw=2, edgecolor='b', alpha=0.5, zorder=1)
+            ellipse_patches.append(ellipses_patch)
+    return ellipse_patches
+
+# just from astropy tutorial 
+def calc_reduced_chi_square(fit, x, y, yerr, N, n_free):
+    """
+    fit (array) values for the fit
+    x,y,yerr (arrays) data
+    N total number of points
+    n_free number of parameters we are fitting
+    """
+    return 1.0 / (N - n_free) * sum(((fit - y) / yerr) ** 2)
