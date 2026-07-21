@@ -33,8 +33,101 @@ from matplotlib.patches import Ellipse as ellipse
 
 # Data handling
 import numpy as np
+import pymc as pm
+import arviz as az
 
-def main():    
+
+# instead of looping it I would want to have all the values computed at once with the respective nan values that I iniate, this would make this process much quicker!
+def spec_fitter_mc(catalog):
+    az.style.use("arviz-variat")
+
+    # get the flx, err, and freq for all the spectral windows of all sources
+    colnames = catalog.colnames
+    freqs_names = [freq for freq in colnames if 'ref_freq_LSPW' in freq]
+    flux_names  = [flux for flux in colnames if 'total_flux_LSPW' in flux]
+    flux_err_names = [err for err in colnames if 'total_flux_e_LSPW' in err]
+    
+    observed_freqs = catalog[freqs_names].as_array().tolist()
+    observed_fluxs = catalog[flux_names].as_array().tolist()
+    observed_flux_errs = catalog[flux_err_names].as_array().tolist()
+        
+    log_freqs = np.log(np.array(observed_freqs))
+    mean_fluxes = np.nanmean(np.array(observed_fluxs), axis=1)
+    log_fluxes = np.log(np.array(observed_fluxs))
+    log_flux_errors = np.array(observed_flux_errs)/np.array(observed_fluxs)
+    
+    log_freqs = np.nan_to_num(log_freqs, posinf=np.nan, neginf=np.nan)
+    log_mean_fluxes = np.log(mean_fluxes)
+    log_fluxes = np.nan_to_num(log_fluxes, posinf=np.nan, neginf=np.nan)
+    log_flux_errors = np.nan_to_num(log_flux_errors, posinf=np.nan, neginf=np.nan)
+
+    # loop through the source here!
+    for iteration in range(len(catalog)):
+        
+        # get all the values for the different arrays
+        c_log_value =log_mean_fluxes[iteration]
+        log_freq = log_freqs[iteration]
+        log_flux = log_fluxes[iteration]
+        log_flux_error = log_flux_errors[iteration]
+    
+    # Create coordinate mapping for log_freq so ArviZ can recognize it as an axis coordinate
+        coords = {"obs_dim": np.arange(len(log_freq)), "log_freq_coord": log_freq}
+    # make sure the data is masked!
+    # we are observing in log-log space so making the powerlaw equation linear
+    # might be easier to just do one prior of just alpha and whatever the spectral 
+    # delta method approximation (dont know why but it is the log err approx)
+        valid_mask = ~np.isnan(log_freq) & ~np.isnan(log_flux) & ~np.isnan(log_flux_error)
+        log_freq = log_freq[valid_mask]
+        log_flux = log_flux[valid_mask]
+        log_flux_error = log_flux_error[valid_mask]
+        # try:
+        
+        with pm.Model() as spectral_model:            
+            pm.Data('log_freq', log_freq, dims='obs_dim')
+            # call one spectral index prior or I could call mutiple and seperate them based on spec index
+            alpha  = pm.Normal('alpha', mu=-1, sigma=1.5)
+            # should this be the deterministic value? mJy prior
+            c = pm.Normal('c', c_log_value, sigma=2)
+            
+            # the expected mean value for the log space
+            # since it is not constant it is only acceped under this changed module
+            spec_flux_density = pm.Deterministic(r'$S_{\nu}$', c + alpha * log_freq, dims='obs_dim') 
+            
+            # liklihood function (for the bayesian analysis, normal models residulas)
+            # check if this is actually accurate!
+            obs_spec_flux_density = pm.Normal(r'Observed $S_{\nu}$', mu=spec_flux_density, sigma=log_flux_error, observed=log_flux, dim='obs_dim')
+            # sampler
+            # print(spectral_model.debug())
+            sample = pm.sample(draws=1000, tune=1000)
+        summary=pm.summary(sample)
+        print(summary)
+
+        # try this?
+        with spectral_model:
+            pm.sample_posterior_predictive(sample, var_names=[r'Observed $S_{\nu}$', r'$S_{\nu}$'], extend_inferencedata=True)
+            
+            # add the mu alpha
+            dt = az.convert_to_datatree(sample)
+            az.plot_trace_dist(sample, combined=True)
+            
+            az.plot_lm(x='log_freq', y=r'$S_{\nu}$', y_obs=r'Observed $S_{\nu}$',dt=dt, plot_dim='obs_dim')
+            plt.show()
+            
+        # if float(summary.iloc[0,0])<=-1:
+        #     # try this?
+        #     with spectral_model:
+        #         pm.sample_posterior_predictive(sample, var_names=[r'Observed $S_{\nu}$', r'$S_{\nu}$'], extend_inferencedata=True)
+                
+        #         # add the mu alpha
+        #         dt = az.convert_to_datatree(sample)
+        #         az.plot_trace_dist(sample, combined=True)
+                
+        #         az.plot_lm(x='log_freq', y=r'$S_{\nu}$', y_obs=r'Observed $S_{\nu}$',dt=dt, plot_dim='obs_dim')
+        #         plt.show()
+        # except:
+        #     print(f'{len(log_flux)} non-nan spws?')
+
+def main(mals_merged = True, associated=False, file_marker='associated'):
     warnings.filterwarnings('ignore', category=AstropyWarning)
     warnings.simplefilter('ignore', category=UnitsWarning)
     # catalog call
@@ -44,15 +137,19 @@ def main():
     catalog_reduced_dir = '/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/reduced_catalogs/'
     catalog_mals_all = '/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/catalogs/mals_all_bands.fits'
     catalog_names = ['MALS_L', 'SPICE-RACS', 'TGSS', 'RACS_low','RACS_low']
-
     # catalog_names = ['MALS_L']
     '''FERMI CATALOG CREATION'''
     # not spectral combined
     mals_all_sources= QTable.read(catalog_mals_all, format='fits')
     'Fermi Catalogs'
-    fermi_lat_surveys = glob.glob('/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/catalogs/gll**.fit')
+    # fermi_lat_surveys = glob.glob('/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/catalogs/gll**.fit')
+    # 14 year
+    fermi_lat_surveys = glob.glob('/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/catalogs/gll**35.fit')
+
     print(fermi_lat_surveys)
-    catalog_years = [8, 10, 12, 14, 16]
+    # catalog_years = [8, 10, 12, 14, 16]
+    catalog_years = [14]
+    
     # iniate three catalogs_types for mals regular, uss, and css 
     # could think of just getting the matches in the regular mals and then apply the uss and css limits to but I dont want to yet.
     
@@ -92,7 +189,9 @@ def main():
     # css_mals_catalog     = copy(mals_catalog.radio_reduction(catalog_type='css'))
     # uss_mals_catalog     = copy(mals_catalog.radio_reduction(catalog_type='uss'))
     
-    folder_surveys = ['8_yr/', '10_yr/', '12_yr/', '14_yr/', '16_yr/']
+    # folder_surveys = ['8_yr/', '10_yr/', '12_yr/', '14_yr/', '16_yr/']
+    folder_surveys = ['14_yr/']
+    
     for cat_year_idx, survey in enumerate(fermi_lat_surveys):
         # fermi call
         survey_hud = fits.open(survey)
@@ -101,15 +200,18 @@ def main():
         # make sure fermi is only calling unassociated sources
         # two step unknown sources only!
         class1_mask = np.isin(Fermi_catalog['CLASS1'], ['unk',''])
-        Fermi_catalog = Fermi_catalog[class1_mask]
+        if associated == False:
+            Fermi_catalog = Fermi_catalog[class1_mask]
+        else :
+            Fermi_catalog = Fermi_catalog[~class1_mask]
 
         print(f'Fermi Unassociated Sources: {len(Fermi_catalog)}')
         fermi_name = 'FERMI'
         fermi_cataloging = Catalog(Fermi_catalog,['RAJ2000', 'DEJ2000','Conf_95_SemiMajor', 'Conf_95_SemiMinor', 'Conf_95_PosAng'],catalog_name=fermi_name, catalog_type='xray' )
         '''FERMI OVERLAY- MALS, RACS, TGSS'''
         # since this is forced to be in a [] maybe fix it for single iteration if the user decides not to put it into a ls format?
-        # fermi_mals_overlay = CatalogOverlayer(base_catalog=fermi_cataloging, comparision_catalogs=[regular_mals_catalog, spice_racs_reducer, tgss_reducer,racs_galatic, racs_galatic_cut])
-        fermi_mals_overlay = CatalogOverlayer(base_catalog=fermi_cataloging, comparision_catalogs=[regular_mals_catalog])
+        fermi_mals_overlay = CatalogOverlayer(base_catalog=fermi_cataloging, comparision_catalogs=[regular_mals_catalog, spice_racs_reducer, tgss_reducer,racs_galatic, racs_galatic_cut])
+        # fermi_mals_overlay = CatalogOverlayer(base_catalog=fermi_cataloging, comparision_catalogs=[regular_mals_catalog,])
 
         # fermi_mals_overlay = CatalogOverlayer(base_catalog=fermi_cataloging, comparision_catalogs=[regular_mals_catalog, uss_mals_catalog, css_mals_catalog])
         fermi_mals_overlay.is_in_ellipse_V2()
@@ -121,7 +223,6 @@ def main():
         print(f'size of tgss matches:{len(matched_comparision_catalogs[2])}')
         print(f'size of rac-low matches:{len(matched_comparision_catalogs[3])+len(matched_comparision_catalogs[4])}')
 
-
         '''SPW CROSSMATCHING MALS'''
         # changed fermi data call - 6/12
         #  changed again 6/26
@@ -130,107 +231,156 @@ def main():
         '''REINSTATE AFTER'''
         # go through every single band for each unlinked object until all possible matches are created
         all_spw_labels = ['LSPW_0', 'LSPW_1', 'LSPW_2', 'LSPW_3',
-                          'LSPW_4', 'LSPW_5', 'LSPW_6', 'LSPW_7',
-                          'LSPW_8', 'LSPW_9', 'LSPW_10', 'LSPW_11',
-                          'LSPW_12', 'LSPW_13', 'LSPW_14']
-        
+                        'LSPW_4', 'LSPW_5', 'LSPW_6', 'LSPW_7',
+                        'LSPW_8', 'LSPW_9', 'LSPW_10', 'LSPW_11',
+                        'LSPW_12', 'LSPW_13', 'LSPW_14']
+        all_spw_labels_check = len(all_spw_labels)
         all_checks = False
         matched_spws = []
-        # loop each spectral window starting from the lowest for source matches
-        while all_checks == False:
-            # applying spectral window matching 
-            # while all_checks == False:
-            # first iteration
-            spw_catalogs = {}
-            spw_catalogs[0] = mal_cat[mal_cat['spw_id'] ==all_spw_labels[0]]
-        
-            mask_base_sources = np.isin(mal_cat['Indexes'], spw_catalogs[0]['Indexes'])
-            spw_catalogs[1] = mal_cat[~mask_base_sources]
-            spw_catalog_class_instances = {}
-            
-            for i in range(len(spw_catalogs.keys())):
-                spw_catalog_class_instances[i] = Catalog(spw_catalogs[i], ['RAJ2000', 'DEJ2000', 'maj_restoring_beam', 'min_restoring_beam', 'pa_restoring_beam', 'total_flux', 'peak_flux', 'spectral_index_spwfit', 'spectral_index_spwfit_e',  's_code', 'spw_id/WB'])
+        iteration = 0
+        if mals_merged == True:
+            # loop each spectral window starting from the lowest for source matches
+            while all_checks == False:
+                # applying spectral window matching 
+                # while all_checks == False:
+                # first iteration
+                spw_catalogs = {}
+                spw_catalogs[0] = mal_cat[mal_cat['spw_id'] ==all_spw_labels[iteration]]
+                mask_base_sources = np.isin(mal_cat['Indexes'], spw_catalogs[0]['Indexes'])
+                spw_catalogs[1] = mal_cat[~mask_base_sources]
+                spw_catalog_class_instances = {}
                 
-            spw__all = CatalogOverlayer(base_catalog=spw_catalog_class_instances[0], comparision_catalogs=[spw_catalog_class_instances[1]])
-            spw__all.is_in_ellipse_V2()
-                        
-            print('Spectral Indexing Complete')
+                for i in range(len(spw_catalogs.keys())):
+                    spw_catalog_class_instances[i] = Catalog(spw_catalogs[i], ['RAJ2000', 'DEJ2000', 'maj_restoring_beam', 'min_restoring_beam', 'pa_restoring_beam', 'total_flux', 'peak_flux', 'spectral_index_spwfit', 'spectral_index_spwfit_e',  's_code', 'spw_id/WB'])
+                    
+                spw__all = CatalogOverlayer(base_catalog=spw_catalog_class_instances[0], comparision_catalogs=[spw_catalog_class_instances[1]])
+                spw__all.is_in_ellipse_V2()
+                
+                spw_base_matched_catalog, spw_comparision_matched_catalog, dict_spws, spw_base_full_cat, spw_comparision_full_cats = spw__all.matched_catalogs_V2(return_parent_catalogs=True)
+                mals_spectral_combined, no_base_match_sources = spectral_window_merging_V2(spw_base_full_cat, spw_comparision_full_cats[0], dict_spws[0])
+                print('Spectral Indexing Complete')
+                # data of current loop
+                print(f'All matches : {all_spw_labels[iteration], len(mals_spectral_combined)}')
+                print('=====')
+                print(f'unassociated sources: {len(no_base_match_sources)}')
+                print(f'Cross Spectral Window Matches {len(dict_spws[0].keys())}')
+                # print('Spectral windows merge 0 and all complete')    
+                
+                # prepare for next loop by iterating through all 
+                matched_spws.append(mals_spectral_combined)
+                mal_cat = no_base_match_sources
+                # all_spw_labels = all_spw_labels[1:]
+                
+                if all_spw_labels_check < 2:
+                    all_checks=True
+                    matched_spws.append(mal_cat)
+                else:
+                    # add the unassociated sources as well!
+                    iteration +=1
+                    all_spw_labels_check = len(all_spw_labels[iteration:]) 
+
+                    continue
+            mals_all_spws_merged = vstack(matched_spws)
+            print(f'all matches {len(mals_all_spws_merged)}')
+            
+            '''I WOULD HAVE TO CALCULATE THE MALS SOURCES ALPHA VALUES HERE?!? Or do it after! the full generation of the catalogs'''
+            # astropy fitting;chi-least-squared-analysis
+            # append the slope as the spectral index and the chi squared as the error? per mals point 
+            # option plot the sources in this case only!
+            model = models.Polynomial1D(degree=1)
+            fitter=fitting.LinearLSQFitter()
+            freq_pattern     = r'ref_freq_LSPW'
+            flux_pattern     = r'total_flux_LSPW'
+            flux_err_pattern = r'total_flux_e_LSPW'
+
+            mals_all_spws_merged = mals_all_spws_merged.filled(0)
+            best_fit_slopes = []
+            best_fit_intercepts = []
+            chi_values = [] 
+            
+            # bayesian monte-carlo fitting of spectral indexes
+            # spec_fitter_mc(mals_all_spws_merged)
+            
+            for mals_source in mals_all_spws_merged:
+                
+                # make all the (x) freqs in order and (y) fluxes in order
+                freq_names = [string for string in mals_source.colnames if  freq_pattern in string]
+                flux_names = [string for string in mals_source.colnames if flux_pattern in string]
+                flux_err_names = [string for string in mals_source.colnames if flux_err_pattern in string]
+
+                
         
-            spw_base_matched_catalog, spw_comparision_matched_catalog, dict_spws, spw_base_full_cat, spw_comparision_full_cats = spw__all.matched_catalogs_V2(return_parent_catalogs=True)
+                # regex call the flux names and make dimensionless
+                flux_values = ([(src/u.mJy) for src in mals_source[flux_names] if src>0])
+                flux_err_values = ([(src/u.mJy) for src in mals_source[flux_err_names] if src>0])
+                freq_values = ([(src/u.MHz) for src in mals_source[freq_names] if src>0])
+                
+                try:
+                    best_fit = fitter(model, freq_values, flux_values)
+                    chi_value = calc_reduced_chi_square(best_fit(freq_values), freq_values, flux_values, flux_err_values, len(freq_values), 1 )
+                    best_fit_slopes.append(best_fit.parameters[1] *u.dimensionless_unscaled)
+                    best_fit_intercepts.append(best_fit.parameters[0] *u.dimensionless_unscaled)
+                    chi_values.append(chi_value *u.dimensionless_unscaled)
+                    # print(best_fit)
+                except:
+                    # for sources with only a single freq capture
+                    best_fit_slopes.append(0.0 *u.dimensionless_unscaled)
+                    best_fit_intercepts.append(0.0*u.dimensionless_unscaled)
+                    chi_values.append(0.0*u.dimensionless_unscaled)
+                    # come back to chi values they feel off!
+                    
+            mals_all_spws_merged.add_columns([best_fit_slopes,best_fit_intercepts,chi_values], names=('fit_alpha_slope', 'fit_start', 'chi_value'))
         
+        else:
+            # create a big dictionary to add all values to all the sources 
+            while all_checks == False:
+                # applying spectral window matching 
+                # first iteration
+                spw_catalogs = {}
+                spw_catalogs[0] = mal_cat[mal_cat['spw_id'] ==all_spw_labels[iteration]]
+                mask_base_sources = np.isin(mal_cat['Indexes'], spw_catalogs[0]['Indexes'])
+                # repeats the sources here!
+                spw_catalogs[1] = mal_cat[~mask_base_sources]
+                spw_catalog_class_instances = {}
+                
+                for i in range(len(spw_catalogs.keys())):
+                    spw_catalog_class_instances[i] = Catalog(spw_catalogs[i], ['RAJ2000', 'DEJ2000', 'maj_restoring_beam', 'min_restoring_beam', 'pa_restoring_beam', 'total_flux', 'peak_flux', 'spectral_index_spwfit', 'spectral_index_spwfit_e',  's_code', 'spw_id/WB'])
+                    
+                spw__all = CatalogOverlayer(base_catalog=spw_catalog_class_instances[0], comparision_catalogs=[spw_catalog_class_instances[1]])
+                comparisions = spw__all.is_in_ellipse_V2()
+                mals_dict = comparisions[0].ellipse_point_index                
+                            
+                mal_cat['spw_matches'] = mal_cat['source_name']
+                for key in mals_dict.keys():
+                    mal_cat['spw_matches'][mals_dict[key]] = mal_cat['source_name'][key]                
+                
+                # preps data for next iteration so there is no overlap/repitition
+                mask_spw_matches = np.isin(mal_cat['spw_matches'], mal_cat['spw_matches'][list(mals_dict.keys())])
+                no_base_match_sources = mal_cat[~mask_spw_matches]
+                match_sources = mal_cat[mask_spw_matches]
+                mal_cat = no_base_match_sources
+                # splits mal into the 'matched' and 'unqiue sources sources again 
+                if all_spw_labels_check < 2:
+                    all_checks=True
+                    matched_spws.append(match_sources)
+                    matched_spws.append(no_base_match_sources)
+
+                else:
+                    matched_spws.append(match_sources)
+                    iteration +=1
+                    all_spw_labels_check = len(all_spw_labels[iteration:])
+                    
+                    # add the unassociated sources as well!
+                    continue
+               
+            mals_all_spws_merged = vstack(matched_spws)
+            print(f'all matches {len(mals_all_spws_merged)}')
+            print(mals_all_spws_merged)
         # for the single loop of all spw windows with just the matching names
         #    get the global indexes for the dict and the key 
         #  matched_comparision_catalogs[matching_source][global_value_indexes] = matched_comparision_catalogs['Source_Name'][global_key_indexes]
         
-            mals_spectral_combined, no_base_match_sources = spectral_window_merging_V2(spw_base_full_cat, spw_comparision_full_cats[0], dict_spws[0])
-            # data of current loop
-            
-            print(f'All matches : {all_spw_labels[0], len(mals_spectral_combined)}')
-            # print(mals_spectral_combined)
-            print('=====')
-            print(f'unassociated sources: {len(no_base_match_sources)}')
-            print(f'Cross Spectral Window Matches {len(dict_spws[0].keys())}')
-            # print('Spectral windows merge 0 and all complete')    
-            
-            # prepare for next loop by iterating through all 
-            matched_spws.append(mals_spectral_combined)
-            mal_cat = no_base_match_sources
-            all_spw_labels = all_spw_labels[1:]
-            
-            if len(all_spw_labels) < 2:
-                all_checks=True
-                matched_spws.append(mal_cat)
-            else:
-                # add the unassociated sources as well!
-                continue
-        mals_all_spws_merged = vstack(matched_spws)
-        print(f'all matches {len(mals_all_spws_merged)}')
-        
-        '''I WOULD HAVE TO CALCULATE THE MALS SOURCES ALPHA VALUES HERE?!? Or do it after! the full generation of the catalogs'''
-        # astropy fitting;chi-least-squared-analysis
-        # append the slope as the spectral index and the chi squared as the error? per mals point 
-        # option plot the sources in this case only!
-        model = models.Polynomial1D(degree=1)
-        fitter=fitting.LinearLSQFitter()
-        freq_pattern     = r'Freq_LSPW*'
-        flux_pattern     = r'Flux_LSPW*'
-        flux_err_pattern = r'Flux_Error_*'
-
-        mals_all_spws_merged = mals_all_spws_merged.filled(0)
-        best_fit_slopes = []
-        best_fit_intercepts = []
-        chi_values = [] 
-        for mals_source in mals_all_spws_merged:
-            # make all the (x) freqs in order and (y) fluxes in order
-            # reg ex call the freq names Freq_LSPW_
-            freq_names = [string for string in mals_source.colnames if re.search(freq_pattern, string)]
-            flux_names = [string for string in mals_source.colnames if re.search(flux_pattern, string)]
-            flux_err_names = [string for string in mals_source.colnames if re.search(flux_err_pattern, string)]
-
-    
-            # regex call the flux names and make dimensionless
-            flux_values = ([(src/u.mJy) for src in mals_source[flux_names] if src>0])
-            flux_err_values = ([(src/u.mJy) for src in mals_source[flux_err_names] if src>0])
-            freq_values = ([(src/u.MHz) for src in mals_source[freq_names] if src>0])
-            
-            try:
-                best_fit = fitter(model, freq_values, flux_values)
-                chi_value = calc_reduced_chi_square(best_fit(freq_values), freq_values, flux_values, flux_err_values, len(freq_values), 1 )
-                best_fit_slopes.append(best_fit.parameters[1] *u.dimensionless_unscaled)
-                best_fit_intercepts.append(best_fit.parameters[0] *u.dimensionless_unscaled)
-                chi_values.append(chi_value *u.dimensionless_unscaled)
-                # print(best_fit)
-            except:
-                # for sources with only a single freq capture
-                best_fit_slopes.append(0.0 *u.dimensionless_unscaled)
-                best_fit_intercepts.append(0.0*u.dimensionless_unscaled)
-                chi_values.append(0.0*u.dimensionless_unscaled)
-                # come back to chi values they feel off!
-                
-        mals_all_spws_merged.add_columns([best_fit_slopes,best_fit_intercepts,chi_values], names=('fit_alpha_slope', 'fit_start', 'chi_value'))
-        
-        '''TEMP JUST FOR MATCHING UNSEP MALS!'''
-        mals_all_spws_merged = mal_cat
+        # plotting the chi values 
             # if i want to plot it add this 
             # print(freq_values)
             # print(flux_values)
@@ -244,9 +394,11 @@ def main():
         # '''todo: change to be iterable!'''
         # done 6/30
         if len(matched_comparision_catalogs)==1:
+            print('single comparision catalog')
             updated_comparision_catalogs = [mals_all_spws_merged]
             
         else:
+            print('multiple comparisions catalogs detected')
             updated_comparision_catalogs = [mals_all_spws_merged, *matched_comparision_catalogs[1:]]
 
         for i in range(len(updated_comparision_catalogs)):
@@ -305,9 +457,9 @@ def main():
                 continue
         hdu_master = fits.HDUList(hdu_list_holder)
         print(len(hdu_master))
-        hdu_master.writeto(catalog_reduced_dir + folder_surveys[cat_year_idx]+'TMR_fermi_tables.fits', overwrite=True)
+        hdu_master.writeto(catalog_reduced_dir + folder_surveys[cat_year_idx]+file_marker+'_spws_merged_fermi_tables.fits', overwrite=True)
         print(f'{folder_surveys[cat_year_idx]}yr-fermi catalogs complete')
 
 if __name__ == '__main__':
     # print(timeit.timeit('main()', number=1))
-    main()
+    main(mals_merged=True, associated=True)

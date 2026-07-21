@@ -1,9 +1,10 @@
 import glob
 from astropy.io import fits
 from astropy.table import vstack
-from astropy.table import Table, Column, MaskedColumn
+from astropy.table import QTable, Column, MaskedColumn
 import os
-# goal of this script is just to find the associations between a survey and ALL of its subsequent 
+# goal of this script is just to find the associations between each DR4/5 and ALL of its associates
+# in doing so it will run the fermi overlay script
 
 # example of Fermi Unassociated Sources in the MeerKAT Absorption Line Survey catalog reduction using classes
 # this should use the 3rd data release which is v31 not v35
@@ -18,7 +19,6 @@ from astropy.coordinates import SkyCoord
 import astropy.coordinates as coord
 from astropy.io import fits
 from astropy.table import vstack
-from astropy.table import Table, Column, MaskedColumn
 # from astropy.table import vstack
 
 # Access astronomical databases
@@ -26,15 +26,15 @@ from astroquery.vizier import Vizier
 # Data handling
 import numpy as np
 
+
+
 # call x surveys across years 
 fermi_lat_surveys = glob.glob('/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/catalogs/gll**.fit')
 catalog_years = [8, 10, 12, 14, 16]
 # catalog_starting_input = input('Select Starting Catalog Year \nOptions 8, 10, 12, 14, 16\nType Here: ')
 
-
 # not call a dict because I dont need to in the future change
 finalized_fermi_mals_dicts = []
-
 
 # variable of which catalog I want to start and end with
 # this should be the only variable aspect of this script 
@@ -58,7 +58,7 @@ mals_catalog = vizier.get_catalogs('J/ApJS/270/33')[0]
 for survey in fermi_lat_surveys[starting_catalog:ending_catalog]:
     # fermi call
     survey_hud = fits.open(survey)
-    Fermi_catalog = Table(survey_hud[1].data)
+    Fermi_catalog = QTable(survey_hud[1].data)
     print(f'====Analysis on {catalog_years[starting_catalog]}-Yr-Fermi Catalog====')
     # provides the maybe and unknown associations
 
@@ -70,20 +70,26 @@ for survey in fermi_lat_surveys[starting_catalog:ending_catalog]:
     
     '''data release call'''
     # 8 year catalog is special wouldnt have a data release call
-    
-    # try:
-    #     Fermi_catalog = Fermi_catalog[Fermi_catalog['DataRelease'] == Data_release]
-    # except:
-    #     pass
+    try:
+        Fermi_catalog = Fermi_catalog[Fermi_catalog['DataRelease'] == Data_release]
+    except:
+        pass
     
     if iteration == 1:
         # you apply the himes example script to get the fermi_source matches 
         # then you would get the fermi keys and get the name of those sources 
         all_associations_types = list(set(Fermi_catalog['CLASS1']))
-        unknown_associated_sources = [class_type for class_type in all_associations_types if class_type.islower()]
-        unknown_associated_sources.append('')
-        class_type_mask = np.isin(Fermi_catalog['CLASS1'], unknown_associated_sources)
-        Fermi_catalog = Fermi_catalog[class_type_mask]
+        remove_from_list = ['unk  ', '     ']
+        all_associations_types_reduced = [element for element in all_associations_types if element not in remove_from_list]
+        # unknown_associated_sources = [class_type for class_type in all_associations_types if class_type.islower()]
+        # unknown_associated_sources.append('')
+        # class_type_mask = np.isin(Fermi_catalog['CLASS1'], unknown_associated_sources)
+        
+        # two step unknown sources only!
+        class1_mask = np.isin(Fermi_catalog['CLASS1'], ['unk  ', 'UNK  ', '     '])
+        Fermi_catalog = Fermi_catalog[class1_mask]
+        class2_mask= np.isin(Fermi_catalog['CLASS2'], ['unk       ', 'UNK       ', '          '])
+        Fermi_catalog = Fermi_catalog[class2_mask]
         
         '''I could otherwise change this process to be all unassociated sources in the first iteration then look in the next iterations '''
         '''himes_script_call'''
@@ -182,11 +188,14 @@ for survey in fermi_lat_surveys[starting_catalog:ending_catalog]:
         # check if they have a CONFIRMED associated source 
         # ls comphresion confirmed
         Fermi_confirmed_assoc_index = [index for index in range(len(Fermi_Catalog_matching_names)) 
-                                       if Fermi_Catalog_matching_names['CLASS1'][index].isupper()]
+                                       if np.any(np.isin(Fermi_Catalog_matching_names['CLASS1'][index], all_associations_types_reduced))]
         
         # ls comphresion unconfirmeds
         Fermi_unconfirmed_assoc_index = [index for index in range(len(Fermi_Catalog_matching_names))
-                                         if Fermi_Catalog_matching_names['CLASS1'][index].islower()]
+                                         if np.any(np.isin(Fermi_Catalog_matching_names['CLASS1'][index], ['unk  ', 'UNK  ', '     ', ]))]
+        # Fermi_unconfirmed_assoc_index.append[index for index in range(len(Fermi_Catalog_matching_names))
+        #                                  if np.any(np.isin(Fermi_Catalog_matching_names['CLASS2'][index], ['unk  ', 'UNK  ', '     ', ]))]
+        
             # if they do add that index to a list
         
         newly_asscoiated   = Fermi_Catalog_matching_names[Fermi_confirmed_assoc_index]

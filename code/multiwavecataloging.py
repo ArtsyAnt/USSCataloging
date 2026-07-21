@@ -391,8 +391,14 @@ def spectral_window_merging_V2(base_window, overlapping_windows, matched_dict):
     # is hardcoding the labels from the full mals cat
     # still dont get this function issues as much as I should 
     # # indicies seperation
-    # get the base catalog 
+    # get the base catalog and the spectral_window_of it and add the flux, fluxerr and freq for the base!
     base_window_new = base_window.copy()
+    base_spwid = list(set(base_window_new['spw_id']))[0]
+    
+    base_window_new[f'total_flux_{base_spwid}'] = base_window_new['total_flux']
+    base_window_new[f'total_flux_e_{base_spwid}'] = base_window_new['total_flux_e']
+    base_window_new[f'ref_freq_{base_spwid}'] = base_window_new['ref_freq']
+
     # merge all the overlapping window catalogs 
     keys_list = list(matched_dict.keys())
     # this gets all of the indicies 
@@ -414,11 +420,11 @@ def spectral_window_merging_V2(base_window, overlapping_windows, matched_dict):
 
 
     for i in range(len(Spectral_window_types)):
-        flux      = Column(empty_data.copy(), name = f'Flux_{Spectral_window_types[i]}', dtype=float, unit=flux_unit)
-        flux_err  = Column(empty_data.copy(), name = f'Flux_Error_{Spectral_window_types[i]}', dtype=float, unit=flux_err_unit)
+        flux      = Column(empty_data.copy(), name = f'total_flux_{Spectral_window_types[i]}', dtype=float, unit=flux_unit)
+        flux_err  = Column(empty_data.copy(), name = f'total_flux_e_{Spectral_window_types[i]}', dtype=float, unit=flux_err_unit)
     #   Peak_flux = MaskedColumn(empty_data.copy(), name = f'FluxPk_{Spectral_window_types[i]}', dtype=float, unit=peak_flux_unit)
-        freq      = Column(empty_data.copy(), name = f'Freq_{Spectral_window_types[i]}', dtype=float, unit=freq_unit)
-        s_code    = Column(empty_data.copy(), name = f'Scode_{Spectral_window_types[i]}', dtype=str)
+        freq      = Column(empty_data.copy(), name = f'ref_freq_{Spectral_window_types[i]}', dtype=float, unit=freq_unit)
+        s_code    = Column(empty_data.copy(), name = f's_code_{Spectral_window_types[i]}', dtype=str)
     #   n_gauss   = MaskedColumn(empty_data.copy(), name = f'Ngauss_{Spectral_window_types[i]}', dtype=float)
     # maybe call the global index as well
         base_window_new.add_columns([flux, flux_err, freq, s_code,])
@@ -429,10 +435,10 @@ def spectral_window_merging_V2(base_window, overlapping_windows, matched_dict):
         spw_values = matched_dict[index]
         for spw_value in spw_values:
             spw = overlapping_windows[spw_value]['spw_id']
-            base_window_new[f'Flux_{spw}'][index] = overlapping_windows[spw_value]['total_flux']
-            base_window_new[f'Flux_Error_{spw}'][index] = overlapping_windows[spw_value]['total_flux_e']
-            base_window_new[f'Freq_{spw}'][index] = overlapping_windows[spw_value]['ref_freq']
-            base_window_new[f'Scode_{spw}'][index] = overlapping_windows[spw_value]['s_code']
+            base_window_new[f'total_flux_{spw}'][index] = overlapping_windows[spw_value]['total_flux']
+            base_window_new[f'total_flux_e_{spw}'][index] = overlapping_windows[spw_value]['total_flux_e']
+            base_window_new[f'ref_freq_{spw}'][index] = overlapping_windows[spw_value]['ref_freq']
+            base_window_new[f's_code_{spw}'][index] = overlapping_windows[spw_value]['s_code']
     
     mask = np.ones(len(overlapping_windows), dtype=bool)
     mask[comparision_spw_indices] = False
@@ -445,7 +451,7 @@ def spectral_window_merging_V2(base_window, overlapping_windows, matched_dict):
 # connecting point between steps in catalog reduction if there are intermediary steps in mutiple catalog calls for same base!
 
 # e.g. if you have mutiple catalogs that you reduced, each will have a global index,
-# for dict_catalog you would call the 
+# for dict_catalog you would call the the reduced catalog linked to the dictionary
 def global_index(dict, dict_catalog, keys_global=None):
     if keys_global != None:
         dict_global = {keys_global['Indexes'][key]: [dict_catalog['Indexes'][value] for value in value_list] 
