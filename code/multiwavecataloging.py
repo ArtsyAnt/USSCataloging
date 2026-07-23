@@ -182,6 +182,8 @@ class CatalogOverlayer:
         print(self.comparision_index )
         # size scaling for capturing within the regions area
         self.size_scale = kwargs.get('beam_scale', 1)
+        # add ang res
+        self.add_ang_sep = kwargs.get('add_ang_sep', False)
         
     # only need if the coordinate systems dont align, this should be a check to add in the ra and dec key word search
     def coordinate_matching(self):
@@ -212,8 +214,8 @@ class CatalogOverlayer:
             # the inital masking (with skycoord uses k-tree matching so faster?!
             robust_comparision_coords = SkyCoord(ra=comparing_cat.catalog[comparing_cat.ra], dec=comparing_cat.catalog[comparing_cat.dec])
             robust_base_coords = SkyCoord(ra=self.base.catalog[self.base.ra], dec=self.base.catalog[self.base.dec])
-            idx_tar, idx_catal, _, _ = search_around_sky(robust_comparision_coords, robust_base_coords, seplimit=largest_sep_limit*u.deg)
-
+            idx_tar, idx_catal, ang_seperation, _ = search_around_sky(robust_comparision_coords, robust_base_coords, seplimit=largest_sep_limit*u.deg)
+            
             # for loop for each key and adding it from its base value
             ellipses_dict = {}
             keys = list(set(idx_catal))
@@ -227,6 +229,11 @@ class CatalogOverlayer:
             print(f'Remaining ellipses {len(self.base.catalog[list(set(idx_catal))])}')
             
         # self.comparision[index].is_in_list=[]
+            # adds ang res so I dont have to calc it again! 
+            if self.add_ang_sep==True:
+                self.comparision[index].catalog['ang_sep'] = np.nan
+                self.comparision[index].catalog['ang_sep'][idx_tar] = ang_seperation
+                
             self.comparision[index].ellipse_point_index = ellipses_dict 
             self.comparision[index].radiuses_from_ellipse = []
             ra_ellipses  = self.base.catalog[self.base.ra]
