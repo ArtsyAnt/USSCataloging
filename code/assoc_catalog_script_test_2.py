@@ -15,7 +15,7 @@ from astropy import units as u
 # from astropy.coordinates import SkyCoord
 # import astropy.coordinates as coord
 from astropy.io import fits
-from astropy.table import vstack, hstack  # DEPRECATED: hstack no longer used since process_single_fermi rewrite. Delete after test pass.
+from astropy.table import vstack
 # too hard to try and find all the quantities right now but need to fix later!
 from astropy.table import QTable, Table, Column, MaskedColumn
 from astropy.modeling import models, fitting
@@ -58,14 +58,6 @@ warnings.filterwarnings('ignore', message=".*merge.*")
 #         except Exception:
 #             return SkyCoord(ra=table[ra_col], dec=table[dec_col], unit=u.deg)
 #     return SkyCoord(ra=table[ra_col], dec=table[dec_col], unit=u.deg)
-
-# DEPRECATED: only used by the old Table/hstack based process_single_fermi. Delete after test pass.
-def rename_table_columns(table, prefix):
-    """Renames all columns in a table with a prefix to prevent hstack collisions."""
-    renamed = table.copy()
-    for col in renamed.colnames:
-        renamed.rename_column(col, f"{prefix}_{col}")
-    return renamed
 
 def calculate_spectral_index(f1, f2, nu1, nu2):
     """Calculates alpha where Flux proportional to freq^alpha."""
@@ -111,7 +103,6 @@ def load_and_prep_catalogs(catalog_configs, base_dir, run_flux_ratio=True):
     return catalog_objects
 
 import numpy as np
-from astropy.table import Table, hstack
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 

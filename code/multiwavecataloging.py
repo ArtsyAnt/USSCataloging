@@ -5,8 +5,6 @@ from copy import copy
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Ellipse as ellipse_mals
-# DEPRECATED import: CircleSkyRegion unused in this module. Delete after test pass.
-# from regions import CircleSkyRegion
 
 from astropy.table import Table, Column, MaskedColumn
 from astropy.table import vstack
@@ -185,10 +183,6 @@ class CatalogOverlayer:
         self.size_scale = kwargs.get('beam_scale', 1)
         # add ang res
         self.add_ang_sep = kwargs.get('add_ang_sep', False)
-        
-    # DEPRECATED: unimplemented stub, never called anywhere in the codebase. Delete after test pass.
-    def coordinate_matching(self):
-        ...
 
     def is_in_ellipse_V2(self):
         # circle-reduction (k-d tree via search_around_sky) narrows candidates to
@@ -312,13 +306,6 @@ class CatalogOverlayer:
             return self.base_matched_catalogs, self.comparision_matched_catalog, self.dict_match, self.base.catalog, self.comparision_catalogs
     
 
-# something to visualize the catalog overlay in different ways?
-# DEPRECATED: unimplemented stub, never used anywhere in the codebase. Delete after test pass.
-class Multicatalogvisual():
-    ...
-# make a function that will plt the values of the scatter in that region and the patch
-
-# done 6-15
 # '''UPDATE TO CONSIDER THE INDEXES FROM THEIR BASE CATALOG!'''
 def fermi_plot(ellipse, ellipse_indexes, point_catalog, point_indexes):
     # can add the CSS_indexes later
