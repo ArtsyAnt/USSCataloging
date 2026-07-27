@@ -15,7 +15,7 @@ from astropy import units as u
 # from astropy.coordinates import SkyCoord
 # import astropy.coordinates as coord
 from astropy.io import fits
-from astropy.table import vstack, hstack
+from astropy.table import vstack, hstack  # DEPRECATED: hstack no longer used since process_single_fermi rewrite. Delete after test pass.
 # too hard to try and find all the quantities right now but need to fix later!
 from astropy.table import QTable, Table, Column, MaskedColumn
 from astropy.modeling import models, fitting
@@ -32,13 +32,11 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse as ellipse
 # Data handling
 import numpy as np
+import time
 
-# frequencies should already be prepped 
+# frequencies should already be prepped
 import glob
 from astropy.table import QTable
-
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
 
 
 'todo/issue; i could replace insertin every source by changing the multiwavecatalogs overlay to accept dicts with a container of catlaog info '
@@ -61,6 +59,7 @@ warnings.filterwarnings('ignore', message=".*merge.*")
 #             return SkyCoord(ra=table[ra_col], dec=table[dec_col], unit=u.deg)
 #     return SkyCoord(ra=table[ra_col], dec=table[dec_col], unit=u.deg)
 
+# DEPRECATED: only used by the old Table/hstack based process_single_fermi. Delete after test pass.
 def rename_table_columns(table, prefix):
     """Renames all columns in a table with a prefix to prevent hstack collisions."""
     renamed = table.copy()
@@ -119,67 +118,60 @@ import astropy.units as u
 
 
 def process_single_fermi(ellipse_index, fermi_catalog_sliced, global_dict_indexes, updated_comparision_catalogs, search_term_z, search_term_flux):
-    # the single fermi source as a dict
-    fermi_source = fermi_catalog_sliced[ellipse_index:ellipse_index + 1]
-    fallback_dict = {col: fermi_source[col][0] for col in fermi_source.colnames}
+    # the single fermi source as a plain dict (no Table wrapper needed for a single row lookup)
+    fermi_source_dict = {col: fermi_catalog_sliced[col][ellipse_index] for col in fermi_catalog_sliced.colnames}
+    fallback_dict = dict(fermi_source_dict)
     fallback_dict['closest_spx_idx'] = np.nan
 
-    # all other caatlaogs
+    # all other catalogs
     values = [global_dict.get(ellipse_index, None) for global_dict in global_dict_indexes]
-    catalog_properties = []
-    # Reconstruct sub-tables from index maps
+
+    # Step A: Collect ALL viable sources inside the semi-major axis ellipse.
+    # updated_comparision_catalogs entries are already plain dicts of numpy arrays
+    # (built in main()), so this stays numpy-indexed the whole way through instead
+    # of round-tripping through astropy Table construction per catalog per source.
+    all_candidate_rows = []
     for catalog_dict, val in zip(updated_comparision_catalogs, values):
         if val is None:
             continue
         mask = np.isin(catalog_dict['Indexes'], val)
         if not np.any(mask):
             continue
-        sub_table_dict = {col: arr[mask] for col, arr in catalog_dict.items()}
-        # this is probably taking alot of time!
-        restored_table = Table(sub_table_dict)
-        catalog_properties.append(restored_table)
 
-    # first fallback just empty fermi source if the matched_catalogs are empty 
-    matched_catalogs = [t for t in catalog_properties if len(t) > 0]
-    if not matched_catalogs:
-        return fallback_dict
+        colnames = list(catalog_dict.keys())
+        cat_name = str(catalog_dict['catalog_names'][mask][0]) if 'catalog_names' in colnames else "survey"
 
-    # Step A: Collect ALL viable sources inside the semi-major axis ellipse
-    all_candidate_rows = []
-    for sub_table in matched_catalogs:
-        colnames = sub_table.colnames
-        cat_name = str(sub_table['catalog_names'][0]) if 'catalog_names' in colnames else "survey"
-        
         ra_col = next((c for c in colnames if 'RAJ' in c.upper()), 'RAJ2000')
         dec_col = next((c for c in colnames if 'DEJ' in c.upper()), 'DEJ2000')
         maj_col = next((c for c in colnames if any(z in c for z in search_term_z)), None)
         flux_col = next((c for c in colnames if any(f in c for f in search_term_flux)), None)
-        
+
         if not maj_col or not flux_col:
             continue
-            
-        ang_seperations = sub_table['ang_sep']
-        seplimit = np.array(sub_table[maj_col], dtype=float)
-        within_ellipse = ang_seperations <= seplimit
-        valid_rows = sub_table[within_ellipse]
-        if len(valid_rows) == 0:
-            continue
-            
+
+        # No re-check against ang_sep here: `mask` already selects exactly the
+        # rows CatalogOverlayer.is_in_ellipse_V2 confirmed are inside the Fermi
+        # source's own rotated semi-major/semi-minor ellipse (via global_dict_indexes).
+        # A prior version additionally filtered ang_sep <= this radio catalog's own
+        # beam major axis (maj_col) - a mismatched-scale check (Fermi confidence
+        # ellipse vs. arcsec-scale radio beam) that dropped valid overlaps.
+        n_valid = int(np.count_nonzero(mask))
+
+        # slice every column down to this catalog's matched rows in one shot
+        sub = {col: np.asarray(arr)[mask] for col, arr in catalog_dict.items()}
+
         # Clean and type-cast valid rows to floating-point numbers immediately
-        valid_rows[ra_col] = valid_rows[ra_col].astype(float)
-        valid_rows[dec_col] = valid_rows[dec_col].astype(float)
-        flux_name_col = np.array([flux_col] * len(valid_rows), dtype='U20')
-        if 'radio_flux_name' in valid_rows.colnames:
-            valid_rows.replace_column('radio_flux_name', flux_name_col)
+        sub[ra_col] = sub[ra_col].astype(float)
+        sub[dec_col] = sub[dec_col].astype(float)
+        sub['radio_flux_name'] = np.array([flux_col] * n_valid, dtype='U20')
+
+        if 'spectral_index' not in sub:
+            sub['spectral_index'] = np.full(n_valid, np.nan)
         else:
-            valid_rows.add_column(flux_name_col, name='radio_flux_name')
-            
-        if 'spectral_index' not in valid_rows.colnames:
-            valid_rows['spectral_index'] = np.nan
-        else:
-            if valid_rows['spectral_index'].dtype.kind in {'S', 'U', 'O'}:
-                clean_idx = valid_rows['spectral_index'].astype(str)
-                float_idx = np.empty(len(valid_rows), dtype=np.float64)
+            spx = sub['spectral_index']
+            if spx.dtype.kind in {'S', 'U', 'O'}:
+                clean_idx = spx.astype(str)
+                float_idx = np.empty(n_valid, dtype=np.float64)
                 for idx, val_str in enumerate(clean_idx):
                     val_strip = val_str.strip()
                     if val_strip in ('', '" "', '--', 'nan', 'None'):
@@ -189,115 +181,111 @@ def process_single_fermi(ellipse_index, fermi_catalog_sliced, global_dict_indexe
                             float_idx[idx] = float(val_strip)
                         except ValueError:
                             float_idx[idx] = np.nan
-                valid_rows.replace_column('spectral_index', float_idx)
+                sub['spectral_index'] = float_idx
             else:
-                valid_rows['spectral_index'] = valid_rows['spectral_index'].astype(np.float64)
-                
-        # Unpack rows to attach critical metadata
-        for idx in range(len(valid_rows)):
-            single_row_table = Table(valid_rows[idx:idx+1])
-            single_row_table.meta['catalog_base_name'] = cat_name
-            single_row_table.meta['ra_key'] = ra_col
-            single_row_table.meta['dec_key'] = dec_col
-            single_row_table.meta['maj_key'] = maj_col
-            single_row_table.meta['flux_key'] = flux_col
-            all_candidate_rows.append(single_row_table)
+                sub['spectral_index'] = spx.astype(np.float64)
+
+        # Unpack rows to plain per-row dicts, carrying metadata as sidecar keys
+        for idx in range(n_valid):
+            row = {col: arr[idx] for col, arr in sub.items()}
+            row['_catalog_base_name'] = cat_name
+            row['_ra_key'] = ra_col
+            row['_dec_key'] = dec_col
+            row['_maj_key'] = maj_col
+            row['_flux_key'] = flux_col
+            all_candidate_rows.append(row)
 
     if not all_candidate_rows:
         return fallback_dict
 
-    # Step B: check for nearby sources in each catalog (this could just be my ellipse call)
+    # Step B: check for nearby sources across catalogs and propagate/derive spectral index.
+    # One vectorized SkyCoord + broadcasted separation matrix replaces building a
+    # scalar SkyCoord per candidate and calling .separation() inside the O(k^2) loop.
     num_sources = len(all_candidate_rows)
-    coords = [SkyCoord(ra=r[r.meta['ra_key']][0], dec=r[r.meta['dec_key']][0], unit=u.deg) for r in all_candidate_rows]
-    limits = [r[r.meta['maj_key']][0] * u.deg for r in all_candidate_rows]
-    
-    # all sources
-    # just taking each one and checking and add spectral index 
+    ra_arr  = np.array([r[r['_ra_key']] for r in all_candidate_rows], dtype=float)
+    dec_arr = np.array([r[r['_dec_key']] for r in all_candidate_rows], dtype=float)
+    maj_arr = np.array([r[r['_maj_key']] for r in all_candidate_rows], dtype=float)
+    has_freq = np.array(['ref_freq' in r for r in all_candidate_rows])
+    freq_arr = np.array([r.get('ref_freq', np.nan) for r in all_candidate_rows], dtype=float)
+
+    coords = SkyCoord(ra=ra_arr * u.deg, dec=dec_arr * u.deg)
+    sep_matrix = coords[:, None].separation(coords[None, :])
+
+    # iteration order matches the original nested loop (idx_i ascending, idx_j > idx_i)
+    # so in-place spectral_index mutations propagate identically pair-to-pair
     for idx_i in range(num_sources):
+        if not has_freq[idx_i]:
+            continue
         row_i = all_candidate_rows[idx_i]
-        coord_i = coords[idx_i]
-        limit_i = limits[idx_i]
-        # all sources except for itself 
         for idx_j in range(idx_i + 1, num_sources):
-            row_j = all_candidate_rows[idx_j]
-            coord_j = coords[idx_j]
-            limit_j = limits[idx_j]
-            
-            if 'ref_freq' not in row_i.colnames or 'ref_freq' not in row_j.colnames:
-                continue # Skip cross-matching if frequency metadata is missing
-                
-            nu1 = float(row_i['ref_freq'][0]) 
-            nu2 = float(row_j['ref_freq'][0])  
+            if not has_freq[idx_j]:
+                continue
+            nu1, nu2 = freq_arr[idx_i], freq_arr[idx_j]
             if nu1 == nu2:
                 continue
-                       
-            # else check the seperation limit
-            sep_ij = coord_i.separation(coord_j)
+
+            sep_ij = sep_matrix[idx_i, idx_j]
+            limit_i = maj_arr[idx_i] * u.deg
+            limit_j = maj_arr[idx_j] * u.deg
             if sep_ij <= limit_i or sep_ij <= limit_j:
-                idx_i_val = row_i['spectral_index'][0]
-                idx_j_val = row_j['spectral_index'][0]
-                
+                row_j = all_candidate_rows[idx_j]
+                idx_i_val = row_i['spectral_index']
+                idx_j_val = row_j['spectral_index']
+
                 if not np.isnan(idx_i_val) and np.isnan(idx_j_val):
-                    row_j['spectral_index'][0] = idx_i_val
+                    row_j['spectral_index'] = idx_i_val
                 elif not np.isnan(idx_j_val) and np.isnan(idx_i_val):
-                    row_i['spectral_index'][0] = idx_j_val
+                    row_i['spectral_index'] = idx_j_val
                 elif np.isnan(idx_i_val) and np.isnan(idx_j_val):
-                    f1 = float(row_i[row_i.meta['flux_key']][0])
-                    f2 = float(row_j[row_j.meta['flux_key']][0])
-                    
+                    f1 = float(row_i[row_i['_flux_key']])
+                    f2 = float(row_j[row_j['_flux_key']])
+
                     calculated_alpha = calculate_spectral_index(f1, f2, nu1, nu2)
-                    row_i['spectral_index'][0] = calculated_alpha
-                    row_j['spectral_index'][0] = calculated_alpha
-
-    # Step C: Isolate the closest source per catalog that HAS a spectral index
-    # appends each catalog name type 
-    catalog_groups = {}
-    for row in all_candidate_rows:
-        cat_base = row.meta['catalog_base_name']
-        if cat_base not in catalog_groups:
-            catalog_groups[cat_base] = []
-        catalog_groups[cat_base].append(row)
-
-    global_closest_row = None
-    global_min_sep = None
-    hstack_elements = [fermi_source]
-    
-    for cat_base, rows in catalog_groups.items():
-        # Filter down strictly to rows that possess a valid spectral index
-        valid_spx_rows = [r for r in rows if not np.isnan(r['spectral_index'][0])]
-        if not valid_spx_rows:
-            continue
-            
-        # Isolate the closest counterpart inside this group and rename
-        # if closer than global closest will supersede it
-        closest_row = min(valid_spx_rows, key=lambda r: r['ang_sep'][0])
-        target_prefix = f"{cat_base}_src1"
-        hstack_elements.append(rename_table_columns(closest_row, prefix=target_prefix))
-        
-        current_sep = closest_row['ang_sep'][0]
-        if global_min_sep is None or current_sep < global_min_sep:
-            global_min_sep = current_sep
-            global_closest_row = closest_row.copy()
-
-    # Step D: Construct Flattened Row Elements and Enforce DataType Safety
-    if global_closest_row is not None:
-        renamed_closest = rename_table_columns(global_closest_row, prefix="closest")
-        hstack_elements.append(renamed_closest)
-        closest_spx_val = global_closest_row['spectral_index'][0]
-    else:
-        closest_spx_val = np.nan
+                    row_i['spectral_index'] = calculated_alpha
+                    row_j['spectral_index'] = calculated_alpha
 
     try:
-        combined_row = hstack(hstack_elements, join_type='outer')
-        combined_row['closest_spx_idx'] = closest_spx_val
-        
-        flat_dict = {}
-        for col in combined_row.colnames:
-            val = combined_row[col][0]
+        # Step C: Isolate the closest source per catalog that HAS a spectral index
+        catalog_groups = {}
+        for row in all_candidate_rows:
+            catalog_groups.setdefault(row['_catalog_base_name'], []).append(row)
+
+        flat_dict = dict(fermi_source_dict)
+        global_closest_row = None
+        global_min_sep = None
+
+        for cat_base, rows in catalog_groups.items():
+            valid_spx_rows = [r for r in rows if not np.isnan(r['spectral_index'])]
+            if not valid_spx_rows:
+                continue
+
+            closest_row = min(valid_spx_rows, key=lambda r: r['ang_sep'])
+            prefix = f"{cat_base}_src1"
+            for col, val in closest_row.items():
+                if col.startswith('_'):
+                    continue
+                flat_dict[f'{prefix}_{col}'] = val
+
+            current_sep = closest_row['ang_sep']
+            if global_min_sep is None or current_sep < global_min_sep:
+                global_min_sep = current_sep
+                global_closest_row = closest_row
+
+        # Step D: attach the single globally-closest matched source and enforce dtype safety
+        if global_closest_row is not None:
+            for col, val in global_closest_row.items():
+                if col.startswith('_'):
+                    continue
+                flat_dict[f'closest_{col}'] = val
+            flat_dict['closest_spx_idx'] = global_closest_row['spectral_index']
+        else:
+            flat_dict['closest_spx_idx'] = np.nan
+
+        for col in list(flat_dict.keys()):
+            val = flat_dict[col]
             if hasattr(val, 'filled'):
                 val = val.filled(np.nan)
-                
-            # scrub column strings and enforce pure float types try to avoid that error
+
             col_upper = col.upper()
             if any(k in col_upper for k in ['RAJ2000', 'DEJ2000', 'DECJ2000', 'ANG_SEP', 'SPECTRAL_INDEX', 'SPX_IDX', 'FLUX']):
                 try:
@@ -307,13 +295,13 @@ def process_single_fermi(ellipse_index, fermi_catalog_sliced, global_dict_indexe
                         val = float(val)
                 except (ValueError, TypeError):
                     val = np.nan
-                    
+
             flat_dict[col] = val
         return flat_dict
-    except Exception as e:
+    except Exception:
         return fallback_dict
 
-    # Step E: Adding background sources 
+    # Step E: Adding background sources
 
 def main(mals_merged = True, associated=True, file_marker='associated'):
     warnings.filterwarnings('ignore', category=AstropyWarning)
@@ -405,6 +393,16 @@ def main(mals_merged = True, associated=True, file_marker='associated'):
             
 
         print(f'Fermi Unassociated Sources: {len(Fermi_catalog)}')
+
+        # Normalize all float columns to float64 up front. Mixed float32/float64
+        # columns of the same name across per-source dicts (matched vs. fallback
+        # rows) is what causes the FITS write to fail at the very end of main() -
+        # fixing it here means every downstream copy inherits a consistent dtype.
+        for col_name in Fermi_catalog.colnames:
+            col = Fermi_catalog[col_name]
+            if col.dtype.kind == 'f' and col.dtype != np.float64:
+                Fermi_catalog[col_name] = col.astype(np.float64)
+
         fermi_name = 'FERMI'
         fermi_cataloging = Catalog(Fermi_catalog,['RAJ2000', 'DEJ2000','Conf_95_SemiMajor', 'Conf_95_SemiMinor', 'Conf_95_PosAng'],catalog_name=fermi_name, catalog_type='xray' )
         '''FERMI OVERLAY- MALS, RACS, TGSS, VLASS, NVSS, SUMSS, FIRST'''
@@ -656,31 +654,37 @@ def main(mals_merged = True, associated=True, file_marker='associated'):
                     
         clean_comparison_catalogs.append(cat_dict)
 
-    print(f"Starting parallel multi-core cross-matching engine for {len(fermi_catalog)} sources...")
-    
-    # Use partial with the SANITIZED 'clean_comparison_catalogs' array dictionary to prevent pickling crashes
-    worker_func = partial(
-        process_single_fermi,
-        fermi_catalog_sliced=fermi_catalog,
-        global_dict_indexes=global_dict_indexes,
-        updated_comparision_catalogs=clean_comparison_catalogs,  # FIX: Pass the safe unmasked dict list
-        search_term_z=search_term_z,
-        search_term_flux=search_term_flux
-    )
-    
-    # Initialize the ProcessPoolExecutor across your system's cores
-    processed_dicts = []
-    with ProcessPoolExecutor() as executor:
-        indices = list(range(len(fermi_catalog)))
-        
-        for chunk_idx, result_dict in enumerate(executor.map(worker_func, indices)):
-            processed_dicts.append(result_dict)
-            
-            # Safe checkpoint tracking loop
-            if chunk_idx % 100 == 0 and chunk_idx > 0:
-                print(f"Parallel checkpoint: {chunk_idx}/{len(fermi_catalog)} sources stacked...")
+    total_sources = len(fermi_catalog)
+    print(f"Starting cross-matching engine for {total_sources} sources...")
 
-    print("\nParallel loops complete. Instantiating masked master catalog matrix...")
+    # Per-source work is now cheap (no per-source Table construction, no
+    # per-pair SkyCoord objects), so a plain sequential loop avoids the
+    # process-pool dispatch/pickling overhead of one task per Fermi source.
+    processed_dicts = []
+    start_time = time.monotonic()
+    last_report = start_time
+    for source_idx in range(total_sources):
+        result_dict = process_single_fermi(
+            source_idx,
+            fermi_catalog_sliced=fermi_catalog,
+            global_dict_indexes=global_dict_indexes,
+            updated_comparision_catalogs=clean_comparison_catalogs,
+            search_term_z=search_term_z,
+            search_term_flux=search_term_flux,
+        )
+        processed_dicts.append(result_dict)
+
+        # Time-based progress reporting instead of every-100 index checkpoints
+        now = time.monotonic()
+        if now - last_report >= 5:
+            elapsed = now - start_time
+            rate = (source_idx + 1) / elapsed
+            print(f"Cross-matching: {source_idx + 1}/{total_sources} sources "
+                  f"({rate:.1f} sources/s, {elapsed:.0f}s elapsed)...")
+            last_report = now
+
+    print(f"\nCross-matching complete in {time.monotonic() - start_time:.0f}s. "
+          "Instantiating masked master catalog matrix...")
     
     # FIX 1: Enforce masked=True on initialization. 
     # This automatically turns inconsistent keys into clean, standardized MaskedColumns.
