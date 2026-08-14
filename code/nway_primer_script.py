@@ -4,19 +4,23 @@ from astropy.io import fits
 from astropy.table import vstack
 from astropy.table import QTable, Column, MaskedColumn
 from astropy.table import Table
-
-
-
 import os
 # goal of this script is just to find the associations between each DR4/5 and ALL of its associates
 # in doing so it will run the fermi overlay script
+
+from multiwavecataloging import Catalog
+from multiwavecataloging import CatalogOverlayer
+from multiwavecataloging import fermi_plot
+from multiwavecataloging import spectral_window_merging_V2
+from multiwavecataloging import global_index
+from multiwavecataloging import calc_reduced_chi_square
 
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 import astropy.coordinates as coord
 from astropy.coordinates import Angle
 from astropy.io import fits
-from astropy.table import vstack
+from astropy.table import hstack, vstack
 # from astropy.table import vstack
 
 # Access astronomical databases
@@ -28,112 +32,127 @@ import numpy as np
 # import pymc as pm
 from nwaylib import nway_match
 from astropy.coordinates import ICRS, FK5
+# warnings
+import warnings
+from astropy.utils.exceptions import AstropyWarning
+from astropy.units import UnitsWarning
 
-
-# ref from nway-apitest.py
-def table_from_fits(fitsname, poserr_value=None, area=None, magnitude_columns=[]):
-	fits_table = fits.open(fitsname)[1]
-	table_name = fits_table.name
-	ra = fits_table.data['RA']
-	dec = fits_table.data['DEC']
-	if 'pos_err' in fits_table.data.columns.names:
-		poserr = fits_table.data['pos_err']
-	else:
-		assert poserr_value is not None, ('"pos_err" column not found in file "%s", and no poserr_value passed' % fitsname)
-		poserr = poserr_value * np.ones(len(ra))
-	if area is None:
-		area = fits_table.header['SKYAREA'] * 1.0
-  
-	# magnitude columns
-	mags = []
-	maghists = []
-	magnames = []
-	#for mag in magnitude_columns:
-	for col_name, magfile in magnitude_columns:
-		assert col_name in fits_table.data.dtype.names
-
-		mag_all = fits_table.data[col_name]
-		# mark -99 as undefined
-		mag_all[mag_all == -99] = np.nan
-
-		mags.append(mag_all)
-		magnames.append(col_name)
-		if magfile == 'auto':
-			maghists.append(None)
-		else:
-			bins_lo, bins_hi, hist_sel, hist_all = np.loadtxt(magfile).transpose()
-			maghists.append((bins_lo, bins_hi, hist_sel, hist_all))
-
-	return dict(name=table_name, ra=ra, dec=dec, error=poserr, area=area, mags=mags, maghists=maghists, magnames=magnames)
-	# area in square degrees
-	# error in arcsec
-	# ra/dec in degrees
-	# mag: column of something
-	# maghists: either (bin, sel, all) tuple or None (for auto)
+# this is ref from nway-apitest.py
 
 def table_from_catalog(catalog, name, poserr_value=None, area=None, magnitude_columns=[]):
-	fits_table = catalog
-	table_name = name
-	ra = fits_table['RA']
-	dec = fits_table['DEC']
-	poserr = fits_table['pos_err']
+    fits_table = catalog
+    table_name = name
+    ra = fits_table['RA']
+    dec = fits_table['DEC']
+    poserr = fits_table['pos_err']
+    # magnitude columns
+    mags = []
+    maghists = []
+    magnames = []
+    #for mag in magnitude_columns:
+    for col_name, magfile in magnitude_columns:
+        assert col_name in fits_table.dtype.names
+        mag_all = fits_table[col_name]
+        # mark -99 as undefined
+        mag_all[mag_all == -99] = np.nan
+        mags.append(mag_all)
+        magnames.append(col_name)
+        if magfile == 'auto':
+            maghists.append(None)
+        # 1d prior!
+        else:
+            bins_lo, bins_hi, hist_sel, hist_all = np.loadtxt(magfile).transpose()
+            maghists.append((bins_lo, bins_hi, hist_sel, hist_all))
 
-	if area is None:
-		area = skyarea * 1.0
-  
-	# magnitude columns
-	mags = []
-	maghists = []
-	magnames = []
-	#for mag in magnitude_columns:
-	for col_name, magfile in magnitude_columns:
-		assert col_name in fits_table.dtype.names
+    # need to return other columns!!!!! n
+    
+    # print(magnames)
+    # print(maghists)
+    return dict(name=table_name, ra=ra, dec=dec, error=poserr, area=area, mags=mags, maghists=maghists, magnames=magnames, original_table=catalog)
 
-		mag_all = fits_table[col_name]
-		# mark -99 as undefined
-		mag_all[mag_all == -99] = np.nan
-
-		mags.append(mag_all)
-		magnames.append(col_name)
-		if magfile == 'auto':
-			maghists.append(None)
-		else:
-			bins_lo, bins_hi, hist_sel, hist_all = np.loadtxt(magfile).transpose()
-			maghists.append((bins_lo, bins_hi, hist_sel, hist_all))
-
-	return dict(name=table_name, ra=ra, dec=dec, error=poserr, area=area, mags=mags, maghists=maghists, magnames=magnames)
 	# area in square degrees
 	# error in arcsec
 	# ra/dec in degrees
 	# mag: column of something
 	# maghists: either (bin, sel, all) tuple or None (for auto)
  
- 
+# creates an offset for the fermi ellipses
 # creates an offset for the fermi ellipses
 def create_fake_catalog(catalog):
     # make a random ra and dec offset that is X greater than the 95% positional uncertainities! 
-    # call position parameters
-    ra = (catalog['RA'][0])
-    dec = (catalog['DEC'][0])
-    ra_err = (catalog['Conf_95_SemiMajor'][0])
-    dec_err = (catalog['Conf_95_SemiMinor'][0])
+    # call position parameters Safely extract scalars
+    ra = catalog['RA'][0] if hasattr(catalog['RA'], '__len__') else catalog['RA']
+    dec = catalog['DEC'][0] if hasattr(catalog['DEC'], '__len__') else catalog['DEC']
+    
+    ra_err = catalog['Conf_95_SemiMajor'][0] if hasattr(catalog['Conf_95_SemiMajor'], '__len__') else catalog['Conf_95_SemiMajor']
+    dec_err = catalog['Conf_95_SemiMinor'][0] if hasattr(catalog['Conf_95_SemiMinor'], '__len__') else catalog['Conf_95_SemiMinor']
+    print(ra)
+    print(dec)
+    
+    # Handle NaN errors safely by substituting a tiny offset in the same direction
+    if np.isnan(ra_err): ra_err = 0.001
+    if np.isnan(dec_err): dec_err = 0.001
 
-    # generate random coordinates
-    # randomize the size of offset
-    # wont be in the inner half of the ra and dec err 
-    random_ra  = np.random.uniform((ra+ra_err*0.5), (ra+ra_err))
-    print(random_ra)
-    random_dec = np.random.uniform((dec+dec_err*0.5), (dec+dec_err))
-    print(random_dec)
+    # --- REGION-SAFE BOUNDS CHECK ---
+    # Dynamically sort the bounds so 'low' is always mathematically smaller than 'high'
+    ra_bound_1 = ra + ra_err * 0.5
+    ra_bound_2 = ra + ra_err
+    ra_low, ra_high = min(ra_bound_1, ra_bound_2), max(ra_bound_1, ra_bound_2)
+
+    dec_bound_1 = dec + dec_err * 0.5
+    dec_bound_2 = dec + dec_err
+    dec_low, dec_high = min(dec_bound_1, dec_bound_2), max(dec_bound_1, dec_bound_2)
+    # ---------------------------------
+
+    # Generate random coordinates using the safe intervals
+    random_ra  = np.random.uniform(ra_low, ra_high)
+    random_dec = np.random.uniform(dec_low, dec_high)
+    
+    print(f"Generated Fake RA: {random_ra}")
+    print(f"Generated Fake DEC: {random_dec}")
 
     # update coordinates
     fake_catalog = catalog.copy()
     fake_catalog['RA'] = random_ra
     fake_catalog['DEC'] = random_dec
-    fake_catalog['catalog_names'] = 'FAKE_' +fake_catalog['catalog_names']
+    fake_catalog['catalog_names'] = 'FAKE_' + fake_catalog['catalog_names']
     return fake_catalog
-    # return new catalog 
+
     
+def load_and_prep_catalogs(catalog_configs, base_dir, run_flux_ratio=True):
+    catalog_objects = {}
+    for config in catalog_configs:
+        name = config['name']
+        cols = config['cols']
+        type = config['type']
+        drop_cols = config.get('drop_cols', [])  
+        run_flux_ratio = config.get('flux_ratio', True)
+        
+        # Perform the glob search using the base file name
+        search_pattern = f'{base_dir}{name}*.fits'
+        file_matches = glob.glob(search_pattern)
+        
+        if not file_matches:
+            print(f'No files found matching pattern: {search_pattern}')
+            continue
+            
+        # Catalog Class loop
+        for file_path in file_matches:
+            try:
+                table = QTable.read(file_path, format='fits')
+                for col in drop_cols:
+                    if col in table.colnames:
+                        table.remove_column(col)
+                catalog_instance = Catalog(table, cols, catalog_name = name, catalog_type=type)
+                if run_flux_ratio:
+                    catalog_instance.flux_ratio()
+                
+                catalog_objects[name] = catalog_instance
+                print(f'Successfully processed catalog wrapper for: {name}')
+                
+            except Exception as e:
+                print(f'Error executing catalog preparation on {file_path}: {e}')
+    return catalog_objects  
 # could be bad but just a basic uncertainity for the catalogs
 # change to just ra uncertainity if necessary!
 def pos_unc(catalog):
@@ -143,25 +162,47 @@ def pos_unc(catalog):
             dec_err = (catalog['Conf_95_SemiMinor']*u.deg).to(u.arcsec)
             pa = (catalog['Conf_95_PosAng']*u.deg)
 
-        case 'TGSS'|'MALS_L'|'RACS_low':
+        case 'MALS_L'|'RACS_low':
             ra_err = catalog['ra_mean_e']
             dec_err = catalog['dec_mean_e']
             pa = catalog['pa_e']*u.deg
 
+        case'FIRST':
+            # unique have to derive it a differnet wya
+            ra_err = 0
+            dec_err= 0
+            pa = 0
+            
+        case 'TGSS':
+            ra_err = catalog['E_DEC']
+            dec_err = catalog['E_RA']
+            pa = catalog['E_PA']*u.deg
+            
+        case 'SUMSS'|'NVSS':
+            ra_err = catalog['e_RAs']
+            dec_err = catalog['e_DEs']
+            pa = 0
+
+        case 'VLASS':
+            ra_err = catalog['e_RAdeg']
+            dec_err = catalog['e_DEdeg']
+            pa = catalog['e_PA']*u.deg
+            
+
         case 'WISE':
-            ra_err = catalog['eeMaj']
-            dec_err = catalog['eeMin']
-            pa = catalog['eePA']
+            ra_err = catalog['sigra']
+            dec_err = catalog['sigdec']
+            pa = 0
 
         case 'PANSTARRS':
             ra_err = catalog['e_RAJ2000']
             dec_err = catalog['e_DEJ2000']
             pa = 0
 
-        case 'GAIA':
-            ra_err = catalog['RA_e']
-            dec_err = catalog['DEC_e']
-            pa = 0
+        # case 'GAIA':
+        #     ra_err = catalog['RA_e']
+        #     dec_err = catalog['DEC_e']
+        #     pa = 0
             
         # vizier catalog search
         case _:
@@ -257,9 +298,26 @@ def spec_fitter_mc(catalog):
     # keeps the intermediary catalogs 
     # if no fermi_names are specificed (from the fermi source_name descriptor) it will do a nway match for all sources
     # to add vizier call
-def main(catalog_year ='14', terminal_call =True, offset_calibration=False, keep_catalogs=True, fermi_names=None, overwrite=False):
-    catalog_mals_call = '/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/reduced_catalogs/'
-    fermi_list_combined = catalog_mals_call + catalog_year +'_yr/' + 'MALS_spws_fermi_tables.fits'
+def main(catalog_year ='14',match_type='mag-prior', prior_input = None,
+         terminal_call =True, offset_calibration=False, keep_catalogs=True,
+         fermi_names=None, 
+         ):
+    
+    warnings.filterwarnings('ignore', category=AstropyWarning)
+    warnings.filterwarnings('ignore', category=RuntimeWarning)
+    warnings.filterwarnings('ignore', message=".*merge.*")
+
+    current_working_dir = os.getcwd()
+    catalog_home_dir = current_working_dir + '/catalogs/'
+    catalog_reduced_dir = current_working_dir + '/reduced_catalogs/'
+    catalog_mals_all = current_working_dir + '/catalogs/mals_all_bands.fits'
+    if match_type =='mag-prior':
+        match_type_path = 'mag_prior_all_nway_matches/'
+    
+    elif match_type == 'distance':
+        match_type_path = 'distance_all_nway_matches/'
+
+    fermi_list_combined = catalog_reduced_dir + catalog_year +'_yr/' + 'unassociated_spws_merged_radio_fermi_tables.fits'
     # maybe make a easy way to click and choose from a list!
     
     hdu_table = fits.open(fermi_list_combined,  memmap=False)
@@ -267,42 +325,119 @@ def main(catalog_year ='14', terminal_call =True, offset_calibration=False, keep
     source_names = [hdu.name for hdu in hdu_table]
     source_names = source_names[1:]
     catalog_size = len(source_names)
+
+    # only look for sources that I havent already dont 
+    if keep_catalogs == True:
+        path = catalog_reduced_dir+match_type_path+catalog_year+ '/4FGL*'
+        files_to_skip =  glob.glob(path)
+        source_names_to_skip = set()
+        for filepath in files_to_skip:
+            filename = os.path.basename(filepath)
+            # Example:
+            # 4FGL J0008.9+2509
+            if '_table_' in filename:
+                source_name = filename.split('_table_', 1)[0]
+                source_names_to_skip.add(source_name)
     
-    # only look for sources that I havent already dont
-    files_to_skip =  glob.glob(catalog_mals_call + 'all_nway_matches/fakes/'+ '4FGL**')
-    files_to_skip  = [source.split('_')[0] for source in files_to_skip]
-    skip_num = len(files_to_skip)
-    print(files_to_skip)
-    
+        # Remove completed sources regardless of their position
+        source_names = [
+            name for name in source_names
+            if name not in source_names_to_skip]
+        skip_num = len(source_names_to_skip)
+        
+        print(path)
+        print(f'{skip_num} sources skipped')
+
+        # source_names = source_names[skip_num:]
+        # print(files_to_skip)
+        # removes x file never input lol
+    else:
+        files_to_skip = []
+        skip_num = len(files_to_skip)
+
+        
     for source_index, source_name in enumerate(source_names):
         print(f'======{source_name}======')
         ellipse = QTable(hdu_table[source_name].data)
+        # TEMP
+        ellipse['Source_Name'][1:] = ''
+        # hardcoded skip so that we only focus on the smaller ellipse matches
+        if len(ellipse) > 450:
+            continue
+        # print(ellipse)
         # ellipse.remove_column('DEC_Counterpart')
-        # best to rename all files to work with the nway internal and extrenal call!
-        ellipse.rename_column('RAJ2000', 'RA')
-        ellipse.rename_column('DEJ2000', 'DEC')
+        # best to rename all files to work with the nway internal and extrenal call
 
         catalogs = []
         catalog_names = list(set(ellipse['catalog_names']))
-        for name in catalog_names:
+        for name in catalog_names: 
             table_mask = np.isin(ellipse['catalog_names'], name)
             catalog = ellipse[table_mask]
+            # if name =='WISE':
+            #     if np.isnan(catalog['RA']):
+            #         continue
+                # catalog.rename_column('ra', 'RA')
+                # catalog.rename_column('dec', 'DEC')
+                
         
-            # remove the empty columns created when merging the base radio catalogs! add more when necessary
-            cols_to_remove = [col_name for col_name in catalog.colnames if np.all(np.isin(catalog[col_name], ['--', '[]', '', ' ']))]
-            protected_cols = {'CLASS1', 's_code', 'ASSOC1', 'Source_Name'}
+            # remove the empty columns created when merging the base radio catalogs! add more when 
+    
+            cols_to_remove = []
+            for col_name in catalog.colnames:
+                col = catalog[col_name]
+                
+                # 1. Check if the entire column consists of blank/empty strings or formatting artifacts
+                is_empty_string = np.all(np.isin(col, ['--', '[]', '', ' ']))
+                
+                # 2. Check if the entire column consists of numerical NaNs
+                # Wrapped in a try/except because np.isnan crashes on string data types
+                try:
+                    is_all_nan = np.all(np.isnan(col))
+                except TypeError:
+                    is_all_nan = False
+                    
+                # 3. Check if the entire column is masked out (empty fields from an Astropy table merge)
+                is_all_masked = hasattr(col, 'mask') and np.all(col.mask)
+                
+                # If ANY of these conditions are completely true for the column, flag it for deletion
+                if is_empty_string or is_all_nan or is_all_masked:
+                    cols_to_remove.append(col_name)
+            
+            # Ensure essential identification columns are never dropped
+            protected_cols = {'CLASS1', 's_code', 'ASSOC1', 'Source_Name',  'Conf_95_SemiMajor', 'Conf_95_SemiMinor', 'Conf_95_PosAng'} 
             cols_to_remove = [col for col in cols_to_remove if col not in protected_cols]
             
-            print('removing columns')
-            print(cols_to_remove)
-            catalog.remove_columns(cols_to_remove)
-
+            # print('removing columns:')
+            # print(cols_to_remove)
+            catalog.remove_columns(cols_to_remove) 
+            # since i didnt properly transform all the catalogs before properly need to make sure that is a core part of catalog prep!
+            try:
+                catalog.rename_column('RAJ2000', 'RA')
+            except:
+                pass
+            try:
+                catalog.rename_column('DEJ2000', 'DEC')
+            except:
+                pass
+            try:
+                catalog.rename_column('ra', 'RA')
+            except:
+                pass
+            try:
+                catalog.rename_column('dec', 'DEC')
+            except:
+                pass
             # get the positional uncertanity for each catalog 
             positional_uncer = pos_unc(catalog)
             catalog['pos_err'] = positional_uncer
+            # print(catalog)
                 
             # used to identify the fermi catalog I could probably combine both the for loops since they do the same process of iterating between catalogs 
             if catalog['Source_Name'][0] == source_name:
+
+                # print(catalog)
+                # create the catalog reducer file for the other overlay
+                fermi_catalog_reducer = Catalog(catalog, ['RA', 'DEC','Conf_95_SemiMajor', 'Conf_95_SemiMinor', 'Conf_95_PosAng'],catalog_name='FERMI', catalog_type='xray' )
                 offset_catalog = create_fake_catalog(catalog)
                 catalogs.append(offset_catalog)
                 catalog['ID'] = 1
@@ -315,64 +450,6 @@ def main(catalog_year ='14', terminal_call =True, offset_calibration=False, keep
                 un_protected_cols = {'CLASS1',  'ASSOC1', 'Source_Name'}
                 catalog.remove_columns(un_protected_cols)
             catalogs.append(catalog)
-    
-        print('start vizier search')
-
-        # gaia, wise, and panstarrs call
-        overlays = {'I/355': ['GAIA', '*', 'e_RA_ICRS', 'e_DE_ICRS'],
-                    'II/311': ['WISE', '*', 'eePA']
-                    , 'II/349':['PANSTARRS', '*']}
-        
-        print(f'Source Overlays Final Numbers:')
-        for overlay, column in overlays.items():
-            catalog_name = column.pop(0)
-            try:
-                vizier = Vizier(columns=column)
-                vizier.ROW_LIMIT = -1# -1 means unlimited
-                overlay_catalog = vizier.query_region(
-                                                      coord(ra=ra, dec=dec,
-                                                            unit=(u.deg, u.deg),
-                                                            frame='fk5'), radius=Angle(semi_minor, "deg"),  catalog=[overlay])[0]
-            except:
-                continue
-            
-            match overlay:
-                case 'I/355':
-                    ra_gaia = overlay_catalog['RA_ICRS']
-                    dec_gaia = overlay_catalog['DE_ICRS']
-                    ra_gaia_e = overlay_catalog['e_RA_ICRS']
-                    dec_gaia_e = overlay_catalog['e_DE_ICRS']
-
-                    c_icrs = SkyCoord(ra=ra_gaia , dec=dec_gaia , frame='icrs')
-                    c_icrs_e = SkyCoord(ra=ra_gaia_e.to(u.arcsec), dec=dec_gaia_e.to(u.arcsec), frame='icrs')
-
-                    # Transform to J2000 (which Astropy treats as the FK5 frame)
-                    c_j2000 = c_icrs.transform_to(FK5(equinox='J2000.0'))
-                    c_j2000_e = c_icrs_e.transform_to(FK5(equinox='J2000.0'))
-
-                    ra_gaia = c_j2000.ra.degree
-                    dec_gaia = c_j2000.dec.degree
-                    
-                    ra_gaia_e = c_j2000_e.ra
-                    dec_gaia_e = c_j2000_e.dec
-
-                    overlay_catalog['RA_ICRS'] = ra_gaia
-                    overlay_catalog['DEC_ICRS'] = dec_gaia
-                    overlay_catalog['e_RA_ICRS'] = ra_gaia_e.to(u.arcsec)
-                    overlay_catalog['e_DEC_ICRS'] = dec_gaia_e.to(u.arcsec)
-                    
-                    overlay_catalog.rename_columns(['RA_ICRS','DEC_ICRS', 'e_RA_ICRS', 'e_DEC_ICRS'],
-                                                ['RA', 'DEC', 'RA_e', 'DEC_e'])
-                case _:
-                    overlay_catalog.rename_columns(['RAJ2000', 'DEJ2000'], ['RA', 'DEC'])
-            
-            overlay_catalog['catalog_names'] = [catalog_name] * len(overlay_catalog)
-            overlay_catalog_pos_uncr = pos_unc(overlay_catalog)
-            overlay_catalog['pos_err'] = overlay_catalog_pos_uncr
-            
-            overlay_catalog = overlay_catalog[overlay_catalog['pos_err'] > 0]
-            catalogs.append(overlay_catalog)
-            print(f'{catalog_name}: {len(overlay_catalog)}' )
 
         #spec_match mals catalog here
         # all catalogs will match the same area!
@@ -384,14 +461,13 @@ def main(catalog_year ='14', terminal_call =True, offset_calibration=False, keep
         
         primed_catalogs =[]
         catalog_paths = []
-
         # if; the writing for the files should be here
         for catalog in catalogs:
             name = list(set(catalog['catalog_names']))
             print(name)
             catalog.meta['EXTNAME'] = name[0]
             catalog.meta['SKYAREA'] = area  
-            catalog_path= catalog_mals_call + 'send_test/'+ f'{name[0]}_catalog.fits'  
+            catalog_path= catalog_reduced_dir + 'send_test/'+ f'{name[0]}_catalog.fits'  
             # catalogs.append(catalog)
             # catalog_paths.append(catalog_path)
             # catalog.write(catalog_path, format='fits', overwrite='True')
@@ -405,59 +481,218 @@ def main(catalog_year ='14', terminal_call =True, offset_calibration=False, keep
         # script call
         else:
             # create an array for catalogs, magnitude columns 
-            primed_tables =[]
+             # create an array for catalogs, magnitude columns
+            primed_tables = []
+            
+            # Track names to prevent appending duplicate catalog runs (e.g., dual WISE tables)
+            seen_catalog_names = set()
+        
             for catalog in catalogs:
                 catalog = catalog.filled(0)
                 name = catalog.meta['EXTNAME']
                 skyarea = catalog.meta['SKYAREA']
-                catalog=Table(catalog.as_array())
+                catalog = Table(catalog.as_array())
+                
+                # Skip this catalog if we already processed a valid instance of it in this run
+                if name in seen_catalog_names:
+                    print(f"Skipping duplicate catalog entry for: {name}")
+                    continue
+        
+                primed_table = None # Reset placeholder
+        
                 match name:
-                    case 'FERMI'|'GAIA'|'PANSTARRS'|'WISE':
+                    case 'FERMI'|'GAIA'|'PANSTARRS':
                         primed_table = table_from_catalog(catalog, name, area=skyarea)
-                        primed_tables.append(primed_table)
-
-                    # all radio catalogs get the total flux inquiry?
-                    case 'MALS_L'|'TGSS'|'RACS_low':
-                        if len(catalog) <=100:
+        
+                    case 'MALS_L'|'RACS_low'|'VLASS'|'SUMSS'|'FIRST'|'NVSS'|'TGSS':
+                        if match_type == 'distance':
                             primed_table = table_from_catalog(catalog, name, area=skyarea)
-                        else:
-                            primed_table = table_from_catalog(catalog, name, area=skyarea, magnitude_columns=[('total_flux', 'auto')])
-                        primed_tables.append(primed_table)
+                        elif match_type == 'mag-prior':
+                            priors = glob.glob(current_working_dir + '/priors/' + name + '-*.txt')
+                            # Correctly map flat tuples of (column_name, path)
+                            
+                            magnitude_columns_input = []
+                            for prior_path in priors:
+                                # print(prior_path)
+                                # Extract clean column header name from the file name
+                                # THIS CAN INCREASE DEPENDING ON YOUR FILE PATH BE WARY!
+                                col_name = prior_path.split('-', 3)[2]
+                                # print(col_name)
+                                if col_name in catalog.colnames:
+                                    magnitude_columns_input.append((col_name, prior_path))
+                            # print(magnitude_columns_input)
+                            
+                            try:
+                                primed_table = table_from_catalog(catalog, name, area=skyarea, magnitude_columns=magnitude_columns_input)
+                            except Exception as e:
+                                print(f'Error generating prior table for {name}, falling back to distance match: {e}')
+                                primed_table = table_from_catalog(catalog, name, area=skyarea)
 
+                    case 'WISE':
+                        if match_type == 'distance':
+                            primed_table = table_from_catalog(catalog, name, area=skyarea)
+                        elif match_type == 'mag-prior':
+                            primed_table = table_from_catalog(catalog, name, area=skyarea)
+        
                     case 'FAKE_FERMI':
-                        catalog_path= catalog_mals_call + 'all_nway_matches/fakes/'+ f'{source_name}_fermi_table.fits'  
+                        catalog_path = catalog_reduced_dir + f'{match_type_path}/' + f'{catalog_year}'+'/fakes/' + f'{source_name}_fermi_table.fits'
                         catalog.write(catalog_path, format='fits', overwrite=True)
+                        # primed_table = table_from_catalog(catalog, name, area=skyarea)
+        
+                # Only append to tables if a valid wrapper structure was built, and track the name
+                if primed_table is not None:
+                    primed_tables.append(primed_table)
+                    seen_catalog_names.add(name)
 
-
-            # get mag columns from each 
-            # put off till later 
-            if len(primed_tables) ==1:
-                print('no matches')
+        
+            print(f"Total Unique Catalogs Staged: {len(primed_tables)}")
+        
+            if len(primed_tables) <= 1:
+                print('Insufficient matching catalogs found (1 or 0)')
                 print(f'{source_index+1+skip_num}/{catalog_size}')
                 continue
-            result = nway_match(
-                primed_tables,
-                prior_completeness=1,
-                match_radius = radius_search.value, # in arcsec
-                store_mag_hists = False,
-                mag_include_radius = mag_search_radius.value, # in arcsec #check later
-                )
-            
-            FITS_TABLE = Table.from_pandas(result)
-            # print(FITS_TABLE.colnames)
-            catalog_path= catalog_mals_call + 'all_nway_matches/'+ f'{source_name}_table_{len(FITS_TABLE)-1}.fits'  
-            # print(FITS_TABLE['prob_has_match'])
-            # print(FITS_TABLE['prob_this_match'])
+        
+            for index, table in enumerate(primed_tables):
+                if table['name'] == 'FERMI':
+                    if index > 0:
+                        fermi_table = primed_tables.pop(index)
+                        primed_tables.insert(0, fermi_table)
+                        break
+                    else:
+                        break
 
-            # the absolute probability of a source
-            FITS_TABLE['p_absolute'] = FITS_TABLE['prob_this_match']*FITS_TABLE['prob_has_match']
-            FITS_TABLE.write(catalog_path, format='fits', overwrite=True)
-            print(f'{source_index+1+skip_num}/{catalog_size}')
+        
+            # --- CLEAN CORRUPTED DATA BEFORE MATCHING ---
+            for table_dict in primed_tables:
+                orig_table = table_dict['original_table']
+                
+                # 1. Clean Position Errors: Replace NaN, 0, or negative errors with a safe floor (e.g., 0.1 arcseconds)
+                if 'pos_err' in orig_table.colnames:
+                    bad_errors = (np.isnan(orig_table['pos_err'])) | (orig_table['pos_err'] <= 0)
+                    if np.any(bad_errors):
+                        print(f"WARNING: Found {np.sum(bad_errors)} bad/zero positional errors in {table_dict['name']}. Setting to 0.5 arcsec floor.")
+                        orig_table['pos_err'][bad_errors] = 0.5
+                        
+                # 2. Sync dictionary keys: Update the array nway actually reads
+                table_dict['error'] = orig_table['pos_err']
+        
+                # 3. Clean Coordinates: Ensure no RA or DEC fields are missing/NaN
+                if 'RA' in orig_table.colnames and 'DEC' in orig_table.colnames:
+                    bad_coords = np.isnan(orig_table['RA']) | np.isnan(orig_table['DEC'])
+                    if np.any(bad_coords):
+                        print(f"CRITICAL: Found {np.sum(bad_coords)} NaN coordinates in {table_dict['name']}. Removing corrupted rows.")
+                        # Filter rows completely out of the internal match arrays
+                        valid_mask = ~bad_coords
+                        table_dict['ra'] = table_dict['ra'][valid_mask]
+                        table_dict['dec'] = table_dict['dec'][valid_mask]
+                        table_dict['error'] = table_dict['error'][valid_mask]
+                        table_dict['original_table'] = orig_table[valid_mask]
+
+            # Execute matching with protective error management
+            try:
+                # need to sort primed table first 
+                df_result  = nway_match(
+                    primed_tables,
+                    prior_completeness=1,
+                    match_radius = radius_search.value, 
+                    store_mag_hists = False,
+                    mag_include_radius = mag_search_radius.value, 
+                )
+                result = Table.from_pandas(df_result)
+
+            except Exception as e:
+                print(f"CRITICAL: nway_match failed execution on source {source_name}: {e}")
+                print(f'{source_index+1+skip_num}/{catalog_size}')
+                continue # <--- THIS STOPS UNBOUNDLOCALERROR FROM REACHING THE NEXT LINE
+
+            # We will build a list of tables to stitch horizontally alongside the nway results
+            final_tables_to_combine = [result]
+
+            fermi_match = primed_tables[0]['original_table']
+            results_size = len(result)
+            large_table = vstack([fermi_match] * results_size)
+            for col in large_table.colnames:
+                    large_table.rename_column(col, f"FERMI_{col}")
+                    
+            
+            final_tables_to_combine.append(large_table)
+            # 2. Iterate through each catalog dictionary in your primed_tables list
+            for i, table_dict in enumerate(primed_tables):
+                catalog_name = table_dict['name']  # E.g., 'FERMI', 'VLASS', 'WISE'
+                orig_table = table_dict['original_table']
+
+                # Secondary catalogs (VLASS, WISE, etc.) use their name columns
+                if catalog_name in result.colnames:
+                    matched_indices = result[catalog_name]
+                else:
+                    print(f"Warning: Catalog column {catalog_name} not found in nway output. Skipping.")
+                    continue
+        
+                # --- HANDLE THE -1 NON-MATCHES SAFELY ---
+                # 1. Convert matched_indices to a standard numpy array
+                idx_array = np.array(matched_indices)
+                safe_indices = np.where(idx_array == -1, 0, idx_array)
+                matched_rows = Table(orig_table[safe_indices], masked=True)
+                
+                # 4. Find exactly which rows were supposed to be non-matches (-1)
+                missing_mask = (idx_array == -1)
+                
+                # 5. Completely mask out every column for those specific rows
+                if np.any(missing_mask):
+                    for col in matched_rows.colnames:
+                        matched_rows[col].mask[missing_mask] = True
+
+                        
+                # --- RENAME COLUMNS TO PREVENT DUPLICATES ---
+                for col in matched_rows.colnames:
+                    matched_rows.rename_column(col, f"{catalog_name}_{col}")
+                    
+                final_tables_to_combine.append(matched_rows)
+            
+
+            # 3. Stack the nway probabilities + every single original column side-by-side
+            FITS_TABLE = hstack(final_tables_to_combine)
+            # 4. Save to FITS (Masked arrays automatically turn into FITS null values/NaNs)
+            # Safe conversion now that result is guaranteed to exist
+            # so it stacks them all  like nway does!!
+            catalog_path= catalog_reduced_dir + f'{match_type_path}/'+ f'{catalog_year}/'+ f'{source_name}_table_{len(FITS_TABLE)-1}_matches.fits'  
+
+            # # the absolute probability of a source is useless!
+            # FITS_TABLE['p_absolute'] = FITS_TABLE['prob_this_match']*FITS_TABLE['prob_has_match']
+            threshold = 1000000
+            if len(FITS_TABLE) > threshold:
+                print(f'{len(FITS_TABLE)} exceeds writing threshold {threshold}, reduce to top X and bottom X matches')
+                
+                # Clean duplicates to get reliable rank partitions
+                p_any_list = list(set(FITS_TABLE['prob_has_match']))
+                # 1. Get the fifth HIGHEST threshold (5th from the end)
+                fifth_highest_p_any = np.partition(p_any_list, -5)[-5]
+                # 2. Get the fifth LOWEST threshold (5th from the beginning)
+                fifth_lowest_p_any = np.partition(p_any_list, 4)[4]
+                
+                print(f"Top cut threshold: {fifth_highest_p_any}")
+                print(f"Bottom cut threshold: {fifth_lowest_p_any}")
+                
+                # 3. Combine both masks using a bitwise OR (|)
+                top_mask = FITS_TABLE['prob_has_match'] >= fifth_highest_p_any
+                bottom_mask = FITS_TABLE['prob_has_match'] <= fifth_lowest_p_any
+                
+                FITS_TABLE = FITS_TABLE[top_mask | bottom_mask]
+            
+            print(f'new matched size {len(FITS_TABLE)}')
+                        
+    
+            if keep_catalogs:
+                FITS_TABLE.write(catalog_path, format='fits', overwrite=False)
+                print(f'{source_index+1+skip_num}/{catalog_size}')
+            else:
+                FITS_TABLE.write(catalog_path, format='fits', overwrite=True)
+                print(f'{source_index+1+skip_num}/{catalog_size}')
     hdu_table.close()
  
 if __name__ == '__main__':
     # run the main file and output all of the source names aswell
-    main(terminal_call=False)
+    main(terminal_call=False,match_type='mag-prior', keep_catalogs=False)
     # can include an option to add or not add the catalogs to get written?
     # runs nway for all of the parameters 
     # end()

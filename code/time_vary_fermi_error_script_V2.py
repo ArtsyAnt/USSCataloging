@@ -20,6 +20,7 @@ from astropy.coordinates import SkyCoord
 import astropy.coordinates as coord
 from astropy.io import fits
 from astropy.table import hstack, vstack
+import time 
 # from astropy.table import vstack
 
 # Access astronomical databases
@@ -35,29 +36,44 @@ def rename_table_columns(row, prefix):
     return renamed
 
 def main():
-    catalog_reduced_dir = '/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/reduced_catalogs/'
-
-    # call x surveys across years 
-    fermi_lat_surveys = glob.glob('/Users/mario/Coding/nrao_reu_research/socorro/USSCataloging/catalogs/gll**.fit')
+    catalog_home_dir = '/lustre/aoc/observers/nm-16041/antonio/USSCataloging/catalogs/'
+    catalog_reduced_dir = '/lustre/aoc/observers/nm-16041/antonio/USSCataloging/reduced_catalogs/'
+    
+    fermi_lat_surveys = glob.glob(catalog_home_dir +'gll**.fit')
+    fermi_lat_surveys.sort(reverse=False)
+    print(fermi_lat_surveys)
     yr_16 = fermi_lat_surveys.pop()
-    print(yr_16)
-    catalog_years = ['8', '10', '12', '14']
+    # print(yr_16)
+    catalog_years = ['08', '10', '12', '14']
+
     # removed 16 year!cl
     finalized_fermi_mals_dicts = []
-    unassoc_assoc_all_catalogs = []
+    
     # fermi call
-    '''double check it deosnt call 16 year!'''
-    all_fermi_catalogs = []
+    # '''double check it deosnt call 16 year!'''
+    
+    all_fermi_catalogs_instances = []
     class_prepped_fermi_catalog = []
+    Fermi_catalog_base_list = []
+
     for iteration, survey in enumerate(fermi_lat_surveys):
         survey_hud = fits.open(survey)
-        Fermi_catalog = QTable(survey_hud[1].data)
+        Fermi_catalog = QTable.read(survey_hud[1], format='fits')
         
-        if iteration >=1:
-            all_fermi_catalogs.append(Fermi_catalog)
+        Fermi_catalog_Class = Catalog(Fermi_catalog,['RAJ2000', 'DEJ2000','Conf_95_SemiMajor', 'Conf_95_SemiMinor', 'Conf_95_PosAng'],catalog_name='FERMI_comp', catalog_type='xray')
+        all_fermi_catalogs_instances.append(Fermi_catalog_Class)
             
-        
-        
+    # Extract unique classes from the 'CLASS1' column
+    classes = list(set(Fermi_catalog['CLASS1']))
+ 
+    # Standardize unknown labels (stripping whitespace handles 'unk ' and 'UNK ' automatically)
+    association_unknown = ['unk', 'UNK', '',]
+    # Filter out the unknown classes to keep only known associations
+    association_known = [
+        cls for cls in classes 
+        if str(cls) not in association_unknown
+    ]
+
     # loop for each catalog 
     for starting_catalog in range(len(catalog_years)):
         Data_release_origin = starting_catalog
@@ -68,66 +84,60 @@ def main():
         try:
             # 8 year catalog is special wouldnt have a data release call so try/except
             # only call of the datarelease for candidates not for solutions!
-            Fermi_catalog_base = all_fermi_catalogs[starting_catalog]
-            Fermi_catalog_base = Fermi_catalog_base[Fermi_catalog_base['DataRelease'] == Data_release_origin]
+            Fermi_catalog_base = all_fermi_catalogs_instances[starting_catalog].catalog
+            Fermi_catalog_base = Fermi_catalog_base[Fermi_catalog_base['DataRelease'] == Data_release_origin+1]
         except:
-            pass
-        # base catalog 
-        Fermi_catalog_base = all_fermi_catalogs[starting_catalog]
-        # taken directly
-        associations_unknown = ['unk  ', 'UNK  ', '     ']
-        class1_mask = np.isin(Fermi_catalog_base['CLASS1'], associations_unknown)
+            # base catalog for 8 year since it wont have a datarelease column
+            Fermi_catalog_base = all_fermi_catalogs_instances[starting_catalog].catalog
+        # print(Fermi_catalog_base)
+            # taken directly
+
+        # for catalog year loop through until it gets it first first match with a class1 association
+        class1_mask = np.isin(Fermi_catalog_base['CLASS1'], association_unknown)
         Fermi_catalog_base = Fermi_catalog_base[class1_mask]
-        
-        fermi_reducer = Catalog(Fermi_catalog_base,['RAJ2000', 'DEJ2000','Conf_95_SemiMajor', 'Conf_95_SemiMinor', 'Conf_95_PosAng'],catalog_name='FERMI', catalog_type='xray')
-        x= CatalogOverlayer(base_catalog=Fermi_catalog_base, comparision_catalogs=[])
-        x.is_in_ellipse_V2
-        x.matched_catalogs_V2
-        # check source name
-        # check assoc_flg!
-        # compared_fermi_names = Fermi_catalog['Source_Name']
-        # compared_fermi_names_assoc_fgl_flag = Fermi_catalog['ASSOC_FGL']
-        
-        # check if source is in either assoc_fgl or just as its position!
-        for source in Fermi_catalog_base:
-            unassoc_source_name = source['Source_Name'].split()
-            unassoc_source_names_stripped = unassoc_source_name[1]
-            associated_row = None 
 
-            # data release changes over each catalog 
-            data_release_comparision = starting_catalog+1
-            for comp_catalog in all_fermi_catalogs[starting_catalog+1:]:
-                # see if the source cneter is in the semi_major axis 
-                # assoc matching
-                # print(source['Source_Name'])
-                # print(comp_catalog['ASSOC_FGL'])
-                # THE ASSOC FLAG IS NOT RIGHT YOU FOOL ITS FOR PREVIOUS DATA SETS BEFORE 8 YEARS 
-                
-                
-                compared_source_name = [comp_source['Source_Name'].split()[1] for comp_source in comp_catalog]
-                source_mask = np.isin(compared_source_name, unassoc_source_names_stripped)
-                if np.any(source_mask):
-                    associated_row = comp_catalog[source_mask]
-                    break
-                
-                data_release_comparision+=1
+        # generate empty index of other cats, and their datarelease 
+        # loop through all the sources individually 
+        Data_release_comparision = Data_release_origin +1
 
-            if associated_row == None:
+        for catalog_instance in all_fermi_catalogs_instances[Data_release_comparision:]:
+            Fermi_catalog_base[f'Comparision_Cat_Index_{catalog_years[Data_release_comparision]}'] = [np.nan] * len(Fermi_catalog_base)
+            Fermi_catalog_base[f'DataRelease_{catalog_years[Data_release_comparision]}']  = [np.nan] * len(Fermi_catalog_base)
+            Fermi_catalog_base[f'CLASS1_{catalog_years[Data_release_comparision]}']  = ['   '] * len(Fermi_catalog_base)
+            Fermi_catalog_base[f'Source_Name_{catalog_years[Data_release_comparision]}']  = ['                  '] * len(Fermi_catalog_base)
+            
+ 
+            
+            fermi_reducer = Catalog(Fermi_catalog_base,['RAJ2000', 'DEJ2000','Conf_95_SemiMajor', 'Conf_95_SemiMinor', 'Conf_95_PosAng'],catalog_name='FERMI_base', catalog_type='xray')
+            fermi_overlayer= CatalogOverlayer(base_catalog=fermi_reducer, comparision_catalogs=[catalog_instance])
+            try:
+                fermi_overlayer.is_in_ellipse_V2()
+            except Exception as e:
+                print(e)
                 continue
-            print(data_release_comparision)
-            associated_row = rename_table_columns(associated_row, prefix=f'Fermi_{catalog_years[data_release_comparision]}')
-            source_row = rename_table_columns(source, prefix=f'Fermi_{catalog_years[Data_release_origin]}')
-            data_release_found = [data_release_comparision]
-            data_release_begun = [Data_release_origin]
-            if associated_row[f'Fermi_{catalog_years[data_release_comparision]}_ASSOC1'] not in associations_unknown:
-                association = associated_row[f'Fermi_{catalog_years[data_release_comparision]}_ASSOC1']
-                association_transition = hstack([source_row, associated_row, data_release_begun, data_release_found, association])
-                unassoc_assoc_catalog.append(association_transition)
-                print(len(unassoc_assoc_catalog))
-        unassoc_Table = Table(unassoc_assoc_catalog)
-        unassoc_Table.meta['YEAR'] = catalog_years[starting_catalog]
-        unassoc_Table.write(catalog_reduced_dir+ 'unass_to_assoc' + catalog_years[starting_catalog] +'_yr_matches.fits', format = 'fits')
-        unassoc_assoc_all_catalogs.append(unassoc_assoc_catalog)
+            print(f'datarelease: {Data_release_comparision}')
+            fermi_ellipses_final, matched_comparision_catalogs, dict_comparisions_fermi, fermi_catalog, full_candidate_catalogs = fermi_overlayer.matched_catalogs_V2(return_parent_catalogs=True)
+
+            class_exists_mask = np.isin(matched_comparision_catalogs[0]['CLASS1'], association_known)
+            fermi_catalog = fermi_catalog[0]
+            comparision_cat = full_candidate_catalogs[0]
+            associated_keys = [key for key, value in dict_comparisions_fermi[0].items() if comparision_cat['CLASS1'][value] in association_known]
+
+            # table 
+            for key in associated_keys:
+                Fermi_catalog_base[key] [f'DataRelease_{catalog_years[Data_release_comparision]}'] =   comparision_cat[dict_comparisions_fermi[0][key]]['DataRelease'][0]
+                Fermi_catalog_base[key][f'Comparision_Cat_Index_{catalog_years[Data_release_comparision]}'] =  dict_comparisions_fermi[0][key][0]
+                Fermi_catalog_base[key][f'CLASS1_{catalog_years[Data_release_comparision]}']  = comparision_cat[dict_comparisions_fermi[0][key]]['CLASS1'][0]
+                Fermi_catalog_base[key][f'Source_Name_{catalog_years[Data_release_comparision]}']  = comparision_cat[dict_comparisions_fermi[0][key]]['Source_Name'][0]
+
+            Data_release_comparision +=1
+            print(f'Associations: {len(associated_keys)}')
+        print(Fermi_catalog_base[-8:])
+        Fermi_catalog_base_list.append(Fermi_catalog_base)
+
+    # write table!
+    for i in range(len(catalog_years)):
+        Fermi_catalog_base_list[i].write(catalog_reduced_dir+ 'unass_to_assoc_' + catalog_years[i] +'_yr_matches.fits', format = 'fits', overwrite=True)
         # reset after this!
 
 if __name__ == '__main__':

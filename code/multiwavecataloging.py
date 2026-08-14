@@ -5,7 +5,6 @@ from copy import copy
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Ellipse as ellipse_mals
-from regions import CircleSkyRegion
 
 from astropy.table import Table, Column, MaskedColumn
 from astropy.table import vstack
@@ -77,15 +76,18 @@ class Catalog:
                 # scode
                 self.scode = catalog_labels[9]
 
-            case 'fermi':
+            case 'fermi' |'gamma' |'xray':
                 ...
                 
             case _:
-
-                self.flux = None
-                self.peak_flux = None
-                self.spec_index = None
-        
+                self.flux = catalog_labels[5]
+                # peak_flux
+                self.peak_flux = catalog_labels[6]
+                # specindex
+                self.spec_index = catalog_labels[7]  
+                self.catalog[self.flux] = len(self.catalog) * [self.flux]
+                self.catalog[self.semimajor] = len(self.catalog) * [self.semimajor]
+                
         # add indexes list
         if 'Indexes' in self.catalog.colnames:
             pass
@@ -184,28 +186,24 @@ class CatalogOverlayer:
         self.size_scale = kwargs.get('beam_scale', 1)
         # add ang res
         self.add_ang_sep = kwargs.get('add_ang_sep', False)
-        
-    # only need if the coordinate systems dont align, this should be a check to add in the ra and dec key word search
-    def coordinate_matching(self):
-        ...
-        
+
     def is_in_ellipse_V2(self):
-        # 'complicated' but faster way to run the ellipse matching 
-        # only for ones who have the same coordinate system i.e J2000 so be wary of that
-        #  create the dict of the fermi ellipses and the values for those points after the circle reduction
-        # then loop ONLY through the sources in each fermi ellipse match to check their certainity
-        # afterwards remove the the values that are outside of actual range!
-        # Another note
-            # something I havent thought about was how to merge dicts across mutiple comparisions another dict comphresions!
-        # puts the is_in_list and radiuses array in each compared cat for later
-        # need to put this somewhere else...
+        # circle-reduction (k-d tree via search_around_sky) narrows candidates to
+        # everything within the largest base ellipse's semi-major axis, then the
+        # exact rotated-ellipse equation is evaluated on every candidate pair at
+        # once (no per-ellipse Python loop) before grouping back into a dict.
         try:
             self.base.semi_major_ax = self.base.catalog[self.base.semimajor].to(u.deg)*self.size_scale
             self.base.semi_minor_ax = self.base.catalog[self.base.semiminor].to(u.deg)*self.size_scale
         except:
             self.base.semi_major_ax = self.base.catalog[self.base.semimajor]
             self.base.semi_minor_ax = self.base.catalog[self.base.semiminor]
-        self.base.position_angle = self.base.catalog[self.base.positionangle]
+        try:
+            self.base.position_angle = self.base.catalog[self.base.positionangle]
+        except:
+            #for N/A
+            if self.base.positionangle == 'N/A':
+                self.base.position_angle = [0] * len(self.base.catalog)
         # take largest sep. limit from all the ellipses and use it as a catch all range
         largest_sep_limit = max((self.base.semi_major_ax).value)
         for index in range(self.comparision_index):
@@ -215,63 +213,58 @@ class CatalogOverlayer:
             robust_comparision_coords = SkyCoord(ra=comparing_cat.catalog[comparing_cat.ra], dec=comparing_cat.catalog[comparing_cat.dec])
             robust_base_coords = SkyCoord(ra=self.base.catalog[self.base.ra], dec=self.base.catalog[self.base.dec])
             idx_tar, idx_catal, ang_seperation, _ = search_around_sky(robust_comparision_coords, robust_base_coords, seplimit=largest_sep_limit*u.deg)
-            
-            # for loop for each key and adding it from its base value
-            ellipses_dict = {}
-            keys = list(set(idx_catal))
-            for key in keys:
-                ellipses_dict[key] = []
-            for matched_base_idx, matched_tar_idx in zip(idx_catal, idx_tar):
-                ellipses_dict[matched_base_idx].append(matched_tar_idx)    
-            
+            if len(idx_catal) == 0:
+                print('no matches')
+                continue
+                
             print('circle-reduction')
             print(f'Remaining point matches {len(comparing_cat.catalog[idx_tar])}')
             print(f'Remaining ellipses {len(self.base.catalog[list(set(idx_catal))])}')
-            
-        # self.comparision[index].is_in_list=[]
-            # adds ang res so I dont have to calc it again! 
+
+            # adds ang res so I dont have to calc it again!
             if self.add_ang_sep==True:
                 self.comparision[index].catalog['ang_sep'] = np.nan
                 self.comparision[index].catalog['ang_sep'][idx_tar] = ang_seperation
-                
-            self.comparision[index].ellipse_point_index = ellipses_dict 
-            self.comparision[index].radiuses_from_ellipse = []
+
             ra_ellipses  = self.base.catalog[self.base.ra]
             dec_ellipses = self.base.catalog[self.base.dec]
-            # arbritrary call just for a indexing in the reduced ellipses 
-            for iteration in list(ellipses_dict.keys()):
-                # 2. defining ra as x and dec as y
-                ra_points = comparing_cat.catalog[comparing_cat.ra][ellipses_dict[iteration]]
-                dec_points = comparing_cat.catalog[comparing_cat.dec][ellipses_dict[iteration]]
-                # it was causing a error cause self.basesemimajor is not the same size as the ellipse regions since they are looping @180
-                x_distances_from_center = ra_points  - ra_ellipses[iteration]
-                y_distances_from_center = dec_points - dec_ellipses[iteration]
-                # 3. define angles since we are using it reverse should be reversed
-                theta = np.radians(self.base.position_angle[iteration])
-                cos = np.cos(theta)
-                sin = np.sin(theta)
-                # 4. get rotated x and y 
-                x_rotated = x_distances_from_center * cos - y_distances_from_center *sin
-                y_rotated = x_distances_from_center * sin + y_distances_from_center *cos
-                # 5.check if and y_rot are in the ellipse equation and make a append
-                radius = (x_rotated**2/(self.base.semi_major_ax[iteration])**2)+ ((y_rotated**2)/(self.base.semi_minor_ax[iteration])**2)       
-                # 6. append radius of all mals sources to fermi ellipse [i]
-                self.comparision[index].radiuses_from_ellipse.append(radius)
-                # 7. do a dict/ls comphrension of source if val in radius is <=1
-            # print(len(self.comparision[index].radiuses_from_ellipse))
-        for index in range(self.comparision_index):
-            # return every individual comparision catalog index match from its whole value list to respective key
-            # only if the matching index radii in the iteration's radius is <=1
-            # loops for the given key, value_list_array, and radius_array 
-            ellipses_dict = {key: [match for indexes, match in enumerate(match_list) if radius[indexes]<=1]
-                             for key, match_list, radius
-                             in zip(self.comparision[index].ellipse_point_index.keys(), self.comparision[index].ellipse_point_index.values(), self.comparision[index].radiuses_from_ellipse)}
-            # to remove the empty keys with just []
-            ellipses_dict = {key: matches for key, matches in ellipses_dict.items() if matches}
+
+            # Evaluate the rotated-ellipse equation for every circle-reduced
+            # candidate pair in one vectorized pass (fancy-indexed by idx_catal /
+            # idx_tar) instead of looping per base ellipse.
+            ra_points  = comparing_cat.catalog[comparing_cat.ra][idx_tar]
+            dec_points = comparing_cat.catalog[comparing_cat.dec][idx_tar]
+            x_distances_from_center = ra_points  - ra_ellipses[idx_catal]
+            y_distances_from_center = dec_points - dec_ellipses[idx_catal]
+
+            theta = np.radians(self.base.position_angle[idx_catal])
+            cos = np.cos(theta)
+            sin = np.sin(theta)
+            x_rotated = x_distances_from_center * cos - y_distances_from_center * sin
+            y_rotated = x_distances_from_center * sin + y_distances_from_center * cos
+
+            radius = (x_rotated**2 / (self.base.semi_major_ax[idx_catal])**2) \
+                   + (y_rotated**2 / (self.base.semi_minor_ax[idx_catal])**2)
+
+            within_ellipse = radius <= 1
+            kept_keys   = np.asarray(idx_catal)[within_ellipse]
+            kept_values = np.asarray(idx_tar)[within_ellipse]
+
+            # Group kept (base_idx -> [comparison_idx, ...]) via sort + split
+            # instead of a per-pair Python dict-append loop.
+            ellipses_dict = {}
+            if len(kept_keys) > 0:
+                order = np.argsort(kept_keys, kind='stable')
+                sorted_keys = kept_keys[order]
+                sorted_vals = kept_values[order]
+                unique_keys, group_starts = np.unique(sorted_keys, return_index=True)
+                grouped_vals = np.split(sorted_vals, group_starts[1:])
+                ellipses_dict = {int(key): list(group) for key, group in zip(unique_keys, grouped_vals)}
+
             self.comparision[index].ellipse_point_index = ellipses_dict
             # at this point I am getting the indexes of the catalogs for the fermi
-        #  the comparision class instances 
-        # should it return just the dictionaries since that is what it is doing 
+        #  the comparision class instances
+        # should it return just the dictionaries since that is what it is doing
         return  self.comparision
         
 # you asked for the matched catalogs back >:)
@@ -324,14 +317,6 @@ class CatalogOverlayer:
             return self.base_matched_catalogs, self.comparision_matched_catalog, self.dict_match, self.base.catalog, self.comparision_catalogs
     
 
-# something to visualize the catalog overlay in different ways?
-class Multicatalogvisual():
-    ...
-    # think of how to general the base plotting with subploting features to look at individual sources
-    # and how to look at all sources with varible features from spec index etc.
-# make a function that will plt the values of the scatter in that region and the patch
-
-# done 6-15
 # '''UPDATE TO CONSIDER THE INDEXES FROM THEIR BASE CATALOG!'''
 def fermi_plot(ellipse, ellipse_indexes, point_catalog, point_indexes):
     # can add the CSS_indexes later
