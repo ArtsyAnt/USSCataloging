@@ -17,7 +17,7 @@ We crossmatch unassociated fermi sources with the primary objective of classifyi
 ![Ternary plot of all cross matches sources ](plots/terany_plot_all.png)
 
 We find ~60 blazar and ~60 pulsar sources that contain a combined probability $\geq 50%$ (from multiplying probabilities: prob_has_match, prob_this_match, and p_SOURCE_TYPE).
-![Ternary plot of source matches with a high probability across all three probability thresholds (prob_has_match, prob_this_match, and p_SOURCE_TYPE)](plots/ternary_plot_highest_prop_matches.png)
+![Ternary plot of source matches with a high probability across all three probability thresholds (prob_has_match, prob_this_match, and p_SOURCE_TYPE)](plots/terany_plot_highest_prop_matches.png)
 
 
 ## Path 1 - Recreating Our State:
