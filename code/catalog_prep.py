@@ -5,7 +5,7 @@ import os
 from astropy.io import fits
 from astropy.table import vstack
 from astropy.table import QTable, Column, MaskedColumn
-from astropy.table import Table
+from astropy.table import Tables
 
 from astropy import units as u
 from astropy.coordinates import SkyCoord

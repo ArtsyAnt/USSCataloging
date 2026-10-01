@@ -47,37 +47,61 @@ from sklearn.feature_selection import f_classif
 from sklearn.cluster import KMeans, HDBSCAN
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import log_loss
+from sklearn.utils.class_weight import compute_sample_weight
 import warnings 
+
+import pickle
+
+
+# removed the error columns since I came to the conclusion that a error does not hold any impilicant info about a soure 'Photon_Index_Error', 'Unc_Frac_Variability','Unc_Energy_Flux100', 'Fermi_Flux_Density_Error', 'Unc_Flux1000',
+# 'wise_wise_w3sigmpro',       # W3 profile-fit magnitude uncertainty'wise_wise_w4sigmpro',       # W4 profile-fit magnitude uncertainty
+# 'wise_wise_w1sigmpro',
+# 'wise_wise_w1rchi2',
+#                             'wise_wise_w2sigmpro',       # W2 profile-fit magnitude uncertainty
+#                             'wise_wise_w2rchi2',         # W2 profile-fit goodness-of-fit chi-squared
+#                             'wise_wise_w3rchi2',         # W3 profile-fit goodness-of-fit chi-squared
+#                             'wise_wise_w4rchi2',         # W4 profile-fit goodness-of-fit chi-squared
+#                             'wise_wise_rchi2',           # Average goodness-of-fit chi-squared across all bands
+#                             'wise_wise_nb',              # Number of components fit simultaneously to the source
+#                             'wise_wise_na',              # Number of active pixels used in the profile fit
+
 
 
     # reducing columns from the table 
-columns_to_keep_reduced_wise_limited  = ['Signif_Avg', 'Pivot_Energy', 'Flux1000', 'Unc_Flux1000',
-                            'Energy_Flux100', 'Unc_Energy_Flux100', 'SpectrumType', 'Npred', 'Variability_Index', 'Frac_Variability', 'Unc_Frac_Variability', 'Signif_Peak', 'Flux_Peak', 'Unc_Flux_Peak', 'Time_Peak', 'Peak_Interval',
-                            'CLASS1', 'CLASS2', 'closest_flux_ratio', 'closest_spx_idx', 'CLASS1_rebinned',
-                            'spx_idx_ratio', 'Photon_Index', 'Photon_Index_Error', 'Fermi_Flux_Density', 'Fermi_Flux_Density_Error',
-
-                            'wise_wise_w1mpro','wise_wise_w1sigmpro',
-                            'wise_wise_w1snr','wise_wise_w1rchi2',
-                            'wise_wise_w2mpro',          # W2 profile-fit magnitude
-                            'wise_wise_w2sigmpro',       # W2 profile-fit magnitude uncertainty
-                            'wise_wise_w2snr',           # W2 profile-fit signal-to-noise ratio
-                            'wise_wise_w2rchi2',         # W2 profile-fit goodness-of-fit chi-squared
-                            
-                            'wise_wise_w3mpro',          # W3 profile-fit magnitude
-                            'wise_wise_w3sigmpro',       # W3 profile-fit magnitude uncertainty
-                            'wise_wise_w3snr',           # W3 profile-fit signal-to-noise ratio
-                            'wise_wise_w3rchi2',         # W3 profile-fit goodness-of-fit chi-squared
-                            
-                            'wise_wise_w4mpro',          # W4 profile-fit magnitude
-                            'wise_wise_w4sigmpro',       # W4 profile-fit magnitude uncertainty
-                            'wise_wise_w4snr',           # W4 profile-fit signal-to-noise ratio
-                            'wise_wise_w4rchi2',         # W4 profile-fit goodness-of-fit chi-squared
-                            
-                            'wise_wise_rchi2',           # Average goodness-of-fit chi-squared across all bands
-                            'wise_wise_nb',              # Number of components fit simultaneously to the source
-                            'wise_wise_na',              # Number of active pixels used in the profile fit
-                            # color - color
-                            'wise_wise_W1_W2_color','wise_wise_W2_W3_color', 'wise_wise_W1_W4_color','wise_wise_W2_W4_color','wise_wise_W3_W4_color']
+columns_to_keep_reduced_wise_limited  = [
+    'Signif_Avg', 'Pivot_Energy', 'Flux1000', 
+    'Energy_Flux100', 'SpectrumType', 'Npred', 'Variability_Index', 
+    'Frac_Variability',  'Signif_Peak', 'Flux_Peak', 'Time_Peak', 
+    'Peak_Interval',
+    'CLASS1', 'CLASS2', 'closest_flux_ratio',
+    'closest_spx_idx', 'CLASS1_rebinned',
+    'spx_idx_ratio', 'Photon_Index', 'Fermi_Flux_Density', 
+    'WISE_w1mpro',
+    'WISE_w1snr',
+    
+    'WISE_w2mpro',          # W2 profile-fit magnitude
+    'WISE_w2snr',           # W2 profile-fit signal-to-noise ratio
+    
+    'WISE_w3mpro',          # W3 profile-fit magnitude
+    'WISE_w3snr',           # W3 profile-fit signal-to-noise ratio
+    'WISE_w4mpro',          # W4 profile-fit magnitude
+    'WISE_w4snr',           # W4 profile-fit signal-to-noise ratio
+    
+    # color - color
+    'WISE_W1_W2_color','WISE_W2_W3_color', 'WISE_W1_W4_color','WISE_W2_W4_color','WISE_W3_W4_color', 
+    'FIRST_src1_FINT',
+    'FIRST_src1_FPEAK',
+                 
+    'VLASS_src1_Ftot',
+    'VLASS_src1_Fpeak',
+                 
+    'NVSS_src1_S1.4',    
+    'SUMSS_src1_St',
+                 
+    'TGSS_src1_Total_flux',
+    'TGSS_src1_Peak_flux',
+                 
+    'RACS_low_src1_total_flux',]
 
 
 # my group of four categories use the _ to differiantiate between the active and non active list
@@ -98,7 +122,7 @@ grouped_dict_list_4 = {
                                 'spp', 'SPP',
                                 'gc', 'GC', 'glc', 'GLC',
                                 'mc', 'MC', 'sfr', 'SFR',
-                                'pwm', 'PWN',
+                                'pwn', 'PWN',
                                 'UNK',
                                 'lmb', 'LMB', 'bin', 'BIN', 
                                 'hmb', 'HMB', 'nov', 'NOV'
@@ -113,7 +137,7 @@ grouped_dict_list_3 = {
                                 'spp', 'SPP',
                                 'gc', 'GC', 'glc', 'GLC',
                                 'mc', 'MC', 'sfr', 'SFR',
-                                'pwm', 'PWN',
+                                'pwn', 'PWN',
                                 'UNK',
                                 'lmb', 'LMB', 'bin', 'BIN', 
                                 'hmb', 'HMB', 'nov', 'NOV',
@@ -159,9 +183,10 @@ def main(rebin_type='4'):
         next((rebin for rebin, target_cls in grouped_dict_list.items() if actual_cls in target_cls), actual_cls)
         for actual_cls in fermi_list_14yr_done['CLASS1']
     ]
-    valid_values = fermi_list_14yr_done[~fermi_list_14yr_done['closest_spx_idx'].mask]
-    print(f'valid sources spx idx empty reduction: {len(valid_values)}')    
+    # valid_values = fermi_list_14yr_done[~fermi_list_14yr_done['closest_spx_idx'].mask]
+    valid_values = fermi_list_14yr_done
     valid_values = valid_values[valid_values['closest_flux_ratio'] != np.inf]
+    print(f'valid sources spx idx empty reduction: {len(valid_values)}')    
 
     
     radio_alphas = []
@@ -202,23 +227,50 @@ def main(rebin_type='4'):
     
     # redone of the fermi_alphas 
     # spectral index ratio
-    valid_values['spx_idx_ratio'] = valid_values['closest_spx_idx']/valid_values['closest_spx_idx']
     valid_values['Photon_Index'] = fermi_alphas
+    valid_values['spx_idx_ratio'] = valid_values['closest_spx_idx']/valid_values['Photon_Index']
     valid_values['Photon_Index_Error'] = fermi_alphas_uncertainties
     valid_values['Fermi_Flux_Density'] = fermi_flux_densities
     valid_values['Fermi_Flux_Density_Error'] = fermi_flux_density_uncertanties
-    
-    
+
+
     # wise color subtracting 
     valid_values['wise_wise_W1_W2_color'] = valid_values['wise_wise_w1mpro'] - valid_values['wise_wise_w2mpro']
     valid_values['wise_wise_W2_W3_color'] = valid_values['wise_wise_w2mpro'] - valid_values['wise_wise_w3mpro']
-    
-    
     valid_values['wise_wise_W1_W4_color'] = valid_values['wise_wise_w1mpro'] - valid_values['wise_wise_w4mpro']
     valid_values['wise_wise_W2_W4_color'] = valid_values['wise_wise_w2mpro'] - valid_values['wise_wise_w4mpro']
     # 2. Cool dust component diagnostic
     valid_values['wise_wise_W3_W4_color'] = valid_values['wise_wise_w3mpro'] - valid_values['wise_wise_w4mpro']
     
+    print('reordering columns to match xgboost model columns')
+    column_mapping = {
+    'wise_wise_w1mpro':  'WISE_w1mpro',
+
+    'wise_wise_w1snr':    'WISE_w1snr',
+
+    'wise_wise_w2mpro':    'WISE_w2mpro',          # W2 profile-fit magnitude
+
+    'wise_wise_w2snr':     'WISE_w2snr',           # W2 profile-fit signal-to-noise ratio
+
+    'wise_wise_w3mpro':      'WISE_w3mpro',          # W3 profile-fit magnitude
+
+    'wise_wise_w3snr':      'WISE_w3snr',           # W3 profile-fit signal-to-noise ratio
+
+    'wise_wise_w4mpro':      'WISE_w4mpro',          # W4 profile-fit magnitude
+
+    'wise_wise_w4snr':        'WISE_w4snr',           # W4 profile-fit signal-to-noise ratio
+    
+    # color - color
+    'wise_wise_W1_W2_color': 'WISE_W1_W2_color',
+    'wise_wise_W2_W3_color': 'WISE_W2_W3_color',
+    'wise_wise_W1_W4_color': 'WISE_W1_W4_color',
+    'wise_wise_W2_W4_color': 'WISE_W2_W4_color',
+    'wise_wise_W3_W4_color': 'WISE_W3_W4_color', 
+    }
+    
+    # 2. Rename the columns in your new, unlabeled DataFrame
+    valid_values.rename_columns(list(column_mapping.keys()), list(column_mapping.values()))
+
     labels_to_covert =['CLASS2', 'CLASS1_rebinned', 'SpectrumType', 'CLASS1',] 
 
     # ============================================split data ===========================================
@@ -229,6 +281,7 @@ def main(rebin_type='4'):
     prepreprocessed_valid_values = valid_values[columns_to_keep_reduced_wise_limited].copy()
     prepreprocessed_valid_values = prepreprocessed_valid_values.to_pandas()
     decoded_labels = {}
+    encoders = {}
     # convert string class & other labels to a numerical form
     for label in labels_to_covert:
         if label == 'CLASS1':
@@ -236,6 +289,7 @@ def main(rebin_type='4'):
             convert = class1_label_encoder.fit_transform(prepreprocessed_valid_values[label])
             prepreprocessed_valid_values[f'converted_{label}'] = convert
         elif label == 'CLASS1_rebinned':
+            class_1_rebinned_column = prepreprocessed_valid_values[label]
             class1_rebinned_label_encoder = LabelEncoder()
             convert = class1_rebinned_label_encoder.fit_transform(prepreprocessed_valid_values[label])
             prepreprocessed_valid_values[f'converted_{label}'] = convert
@@ -256,6 +310,7 @@ def main(rebin_type='4'):
             label_coding = LabelEncoder()
             convert = label_coding.fit_transform(prepreprocessed_valid_values[label])
             prepreprocessed_valid_values[f'converted_{label}'] = convert
+            encoders[label] = label_coding
 
     # FIX: Use pandas drop method instead of .remove_columns()
     prepreprocessed_valid_values = prepreprocessed_valid_values.drop(columns=labels_to_covert)
@@ -268,8 +323,12 @@ def main(rebin_type='4'):
             prepreprocessed_valid_values = prepreprocessed_valid_values.drop(columns=[target_col])
     
     data_preprocessed = prepreprocessed_valid_values.replace({np.inf: np.nan, -np.inf: np.nan})
-    data_preprocessed = data_preprocessed.fillna(data_preprocessed.median(numeric_only=True))
-    # col_names = data_preprocessed.columns
+    # commented out to see if there is a differnece 
+    # data_preprocessed = data_preprocessed.fillna(data_preprocessed.median(numeric_only=True))
+
+
+    col_names = data_preprocessed.columns
+    print(col_names)
     '================================================================================'
     scaler = StandardScaler()
     data_preprocessed_scaled = scaler.fit_transform(data_preprocessed)
@@ -278,7 +337,6 @@ def main(rebin_type='4'):
     y_train = labels
     y_train_ungrouped = labels_no_group
     X_train = data_preprocessed_scaled 
-    
     # Count occurrences of each class in your original labels
     # Identify classes that have fewer than 2 members
     class_counts = Counter(y_train_ungrouped)
@@ -292,12 +350,12 @@ def main(rebin_type='4'):
     
     # Step 1: Split 100% into 90% & 10% grouping
     X_remain, X_val, y_remain, y_val = train_test_split(
-        X_train, y_train, test_size=0.10, random_state=42, stratify=y_train
+        X_train, y_train, test_size=0.20, random_state=42, stratify=y_train
     )
-    # Step 2: Split the remaining 90% into 70% Train and 20% Test
-    # Note: 0.2222 of 90% is exactly 20% of the original 100% (20/90 = 0.2222)
+    # Step 2: Split the remaining 75% into 50% Train and 25% Test
+    # Note: 0.2222 of 90% is exactly 20% of the original 100% (25/75 = 0.3333)
     X_train_2, X_test_2, y_train_2, y_test_2 = train_test_split(
-        X_remain, y_remain, test_size=0.2222, random_state=42, stratify=y_remain
+        X_remain, y_remain, test_size=0.25, random_state=42, stratify=y_remain
     )
     print(f'all match types: {list(decoded_labels.keys())}')
     print()
@@ -311,23 +369,34 @@ def main(rebin_type='4'):
     print('randomized wide parameter searching')
     # large randomized search
     wide_param_dist = {
-    'n_estimators': [50, 100, 150, 200, 250, 300, 350, 400],
-    'max_depth': [4,5,6,7],
-    'learning_rate': [0.01, 0.03, 0.05, 0.1, 0.15, 0.2, 0.3],
-    'subsample': [0.6, 0.7, 0.8, 0.9, 1.0],
-    'colsample_bytree': [0.5, 0.7, 0.9, 1.0]
+    'n_estimators': [50, 100, 150, 200, 250, 300, 350, 400, 450, 500], #
+    'max_depth': [4,5,6,7,], #max depth below 3 is a poor fit and above 10 bad?
+    # 'max_delta_step': [1, 4, 7, 9, 10],
+    'learning_rate': [0.01, 0.03, 0.05, 0.1, 0.15, 0.2, 0.3], #
+    'subsample': [0.6, 0.7, 0.8, 0.9, 1.0], #
+    'colsample_bytree': [0.5, 0.7, 0.8, 0.9, 1.0], #
+    
+    # 'scale_pos_weight': [1, 10, 50, 75, 100, 250, 500, 1000] #
     }
+    # i change the scoring system to promote hte our methods 
+
+    #  training sample weights for multi-class balance
+    train_weights = compute_sample_weight(class_weight='balanced', y=y_train_2)
+
+    # scoring for imbalanced sources is neg_log_loss and or a more balanced (biased toward blazar is balanced_accuracy)
+
+    # used to be 1000
     random_search = RandomizedSearchCV(
         estimator=xgb_raw,
         param_distributions=wide_param_dist,
-        n_iter=100,
-        scoring='f1_macro',
+        n_iter=250,
+        
+        scoring='neg_log_loss',
         cv=5,
         n_jobs=-1,
-        random_state=42
-    )
-    random_search.fit(X_train_2, y_train_2, 
-    )
+        random_state=42)
+    
+    random_search.fit(X_train_2, y_train_2, sample_weight=train_weights)
 
     # Fetch the winning parameters from Phase 1
     best_rand = random_search.best_params_
@@ -335,31 +404,63 @@ def main(rebin_type='4'):
     print('narrow grid parameter searching')
     
     narrow_param_grid = {
-        'max_depth': sorted(list(set([max(1, best_rand['max_depth'] - 1), best_rand['max_depth'], best_rand['max_depth'] + 1]))),
-        'learning_rate': sorted(list(set([max(0.005, best_rand['learning_rate'] * 0.7), best_rand['learning_rate'], min(0.5, best_rand['learning_rate'] * 1.3)]))),
-        'subsample': sorted(list(set([max(0.4, best_rand['subsample'] - 0.1), best_rand['subsample'], min(1.0, best_rand['subsample'] + 0.1)]))),
-        'colsample_bytree': sorted(list(set([max(0.4, best_rand['colsample_bytree'] - 0.1), best_rand['colsample_bytree'], min(1.0, best_rand['colsample_bytree'] + 0.1)]))),
-        'n_estimators': sorted(list(set([max(10, int(best_rand['n_estimators'] * 0.85)), best_rand['n_estimators'], int(best_rand['n_estimators'] * 1.15)])))
+        'max_depth': sorted(list(set([
+            int(best_rand['max_depth'] * 0.8), 
+            int(best_rand['max_depth'] * 0.9), 
+            best_rand['max_depth'], 
+            int(best_rand['max_depth'] * 1.1), 
+            int(best_rand['max_depth'] * 1.2)
+        ]))),
+        'learning_rate': sorted(list(set([
+            best_rand['learning_rate'] * 0.8, 
+            best_rand['learning_rate'] * 0.9, 
+            best_rand['learning_rate'], 
+            best_rand['learning_rate'] * 1.1, 
+            best_rand['learning_rate'] * 1.2
+        ]))),
+        'subsample': sorted(list(set([
+            max(0.4, best_rand['subsample'] * 0.8), 
+            max(0.4, best_rand['subsample'] * 0.9), 
+            best_rand['subsample'], 
+            min(1.0, best_rand['subsample'] * 1.1), 
+            min(1.0, best_rand['subsample'] * 1.2)
+        ]))),
+        'colsample_bytree': sorted(list(set([
+            max(0.4, best_rand['colsample_bytree'] * 0.8), 
+            max(0.4, best_rand['colsample_bytree'] * 0.9), 
+            best_rand['colsample_bytree'], 
+            min(1.0, best_rand['colsample_bytree'] * 1.1), 
+            min(1.0, best_rand['colsample_bytree'] * 1.2)
+        ]))),
+        'n_estimators': sorted(list(set([
+            int(best_rand['n_estimators'] * 0.8), 
+            int(best_rand['n_estimators'] * 0.9), 
+            best_rand['n_estimators'], 
+            int(best_rand['n_estimators'] * 1.1), 
+            int(best_rand['n_estimators'] * 1.2)
+        ])))
     }
 
     grid_search = GridSearchCV(
         estimator=xgb_raw,
         param_grid=narrow_param_grid,
-        scoring='f1_macro',
+        scoring='neg_log_loss',
         cv=5,
         n_jobs=-1)
     
-    grid_search.fit(X_train_2, y_train_2)
+    grid_search.fit(X_train_2, y_train_2, sample_weight=train_weights)
     
     print("Phase 2 Final Best:", grid_search.best_params_)
     print("Final Test Accuracy:", grid_search.best_estimator_.score(X_val, y_val))
     
         # --- PHASE 3: FINAL EVALUATION WITH EARLY STOPPING ---
     print('\nTraining final model with early stopping...')
+    val_weights = compute_sample_weight(class_weight='balanced', y=y_test_2)
     # Instantiate a fresh model using the absolute best parameters from Phase 2
     final_tuned_xgb = XGBClassifier(
+        missing=np.nan,
         **grid_search.best_params_,
-        early_stopping_rounds=20,  # Actually activates early stopping
+        early_stopping_rounds=15,  # Actually activates early stopping
         random_state=42,
         objective='multi:softprob',
         eval_metric='mlogloss'
@@ -368,12 +469,14 @@ def main(rebin_type='4'):
     # Use X_test_2 strictly as your early stopping validation set
     final_tuned_xgb.fit(
         X_train_2, y_train_2,
+        sample_weight=train_weights,
         eval_set=[(X_test_2, y_test_2)],
+        sample_weight_eval_set=[val_weights],
         verbose=False
     )
+    
     # evaluate between the best fit model and the default I used before  
     # Evaluate on the true untouched holdout set (X_val)
-
     # compare with this simple version
     xgb_raw = XGBClassifier(
         n_estimators=100,
@@ -394,20 +497,27 @@ def main(rebin_type='4'):
     xgbs = {'Best Found XGB MODEL' :final_tuned_xgb, 'Default XGB MODEL': xgb_raw}
 
     print("\n=== VALIDATION RESULTS SELF-TEST ===")
+    prob_save_flag = 0 
     for xgb_name, xgb_model in xgbs.items():
-        preds_raw = xgb_model.predict_proba(X_val) # Fixed variable name from X_val_
-        preds_prob_raw = xgb_model.predict_proba(X_val)
+        preds_raw = xgb_model.predict_proba(X_val) # Fixed variable name from X_val_        
         preds_class_raw = xgb_model.predict(X_val)
+        preds_class_decoded = class1_rebinned_label_encoder.inverse_transform(preds_class_raw)# transform to get the classes for each source
         log_loss_raw = log_loss(y_val, preds_raw, labels=range(xgb_model.n_classes_))
-    
+
+
+        if prob_save_flag == 0:
+            best_preds_class_raw = preds_class_raw
+            best_preds_class_decoded = preds_class_decoded
+            best_preds_raw = preds_raw
+            prob_save_flag +=1
+        
         mask_actual_matches = (preds_class_raw == y_val)
         mask_actual_misses = (preds_class_raw != y_val)
         missed_probs = preds_class_raw[mask_actual_misses]
         matched_probs = preds_class_raw[mask_actual_matches]
         perc_missed = len(missed_probs)/len(y_val)
         perc_matched = len(matched_probs)/len(y_val)
-        
-        
+    
         print(f"All Raw Features Validation Log Loss : {log_loss_raw:.4f}")
         print(xgb_name)
         # print(f"Optimal trees used: {xgb_model.best_iteration}")
@@ -442,9 +552,45 @@ def main(rebin_type='4'):
         # write down the associated analyitics in a file 
     print("\n=== WRITING RESULTS AND INITAL TREE MODEL ===") 
     # Save the model
-    final_tuned_xgb.save_model('best_xgb_model' + rebin_label +'.json')
-    print(f"Successfully saved final tuned XGBoost model to {'best_xgb_model' + rebin_label +'.json'}")
+    final_tuned_xgb.save_model('pulsar_best_xgb_model' + rebin_label +'.json')
+    print(f"Successfully saved final tuned XGBoost model to {'pulsar_best_xgb_model' + rebin_label +'.json'}")
 
+
+    # saving all the components of the test data so nothing is skewed in the unassociated results!
+    with open('pulsar_scaler' + rebin_label + '.pkl', 'wb') as f:
+        pickle.dump(scaler, f)
+    
+    with open('pulsar_spectrumtype_encoder' + rebin_label + '.pkl', 'wb') as f:
+        pickle.dump(encoders['SpectrumType'], f)
+    
+    with open('pulsar_feature_order' + rebin_label + '.pkl', 'wb') as f:
+        pickle.dump(list(col_names), f)   # keep this too — cheap insurance against future column-order drift
+        
+    X_val = scaler.inverse_transform(X_val)
+    y_val = class1_rebinned_label_encoder.inverse_transform(y_val)
+    sample_table = QTable(X_val, names=col_names)
+    # Save the reduced associated catalog 
+    # call model
+    # add the predictions - uncoded top match 
+    # add the predictions - encoded top match
+    # add the predicitions - probablities all labels 
+    # ADD TOP PREDICTION — ENCODED
+    sample_table[rebin_label + '_top_class_pred_idx'] = best_preds_class_raw
+    # ADD TOP PREDICTION — DECODED
+    sample_table[rebin_label + '_top_class_pred'] = best_preds_class_decoded
+    sample_table[rebin_label + '_top_class_pred'] = [str(x) for x in sample_table[rebin_label + '_top_class_pred']]
+    # take the classes and get the probbility of each class 
+    for probability_column_idx, decoded_class in enumerate(
+        list(decoded_labels.keys())
+    ):
+        probability_column_name = (rebin_label + '_' + decoded_class + '_prob')
+        sample_table[probability_column_name] = (best_preds_raw[:, probability_column_idx])
+    print(f'decoded classes: {list(decoded_labels.keys())}')
+    sample_table.add_column(y_val, name = 'Real_Class1_Rebinned')
+    sample_table['Real_Class1_Rebinned'] = [str(x) for x in sample_table['Real_Class1_Rebinned']]
+    sample_table.write(catalog_reduced_dir+'pulsar_sample_14yr_associated_ellipses_all_srcs_gaia_wise' + rebin_label + 'xgmodeled.fits', format='fits', overwrite=True)
+    print(f'Successfully saved valid associated sources with xgboost % appended')
+    
     # plt and save the feature importance
 # 1. Map column names to feature importances in a Pandas Series
 # (Replace 'your_column_list' with your actual text names variable)
@@ -472,11 +618,13 @@ def main(rebin_type='4'):
     
     # Adjust layouts to automatically fit long string arrays safely
     plt.tight_layout()
-    plt.savefig('feature_importances_best_xgb_model' + rebin_label +'.png', dpi=300)
+    plt.savefig('pulsar_feature_importances_best_xgb_model' + rebin_label +'.png', dpi=300)
     plt.show()
     # add the second training set 
     # call it!
 
 
+
 if __name__ == '__main__':
-    main(rebin_type='4')
+    # change so that is just does both of the associated and unassociated call 
+    main(rebin_type='3')

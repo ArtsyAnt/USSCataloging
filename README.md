@@ -9,11 +9,22 @@ numpy, astropy, astroquery, nway, xgboost, etc
 alot of the methods belows suffer from incomplete steps or steps that contains significant bugs
 
 
+## Current Outputs
+We crossmatch unassociated fermi sources with the primary objective of classifying them with radio-infrared counterparts. Through NWAY and XGBOOST probability modeling we can attempt to classify the type of sources from our crossmatches. We search find matches for blazar and pulsars. We present this work using an approach to unassociated source matching in a probabilistic and flexible manner.
+
+![Mollweide distribution of all currently implemented radio catalog](plots/mollweide_radio_survey.png)
+
+![Ternary plot of all cross matches sources ](plots/terany_plot_all.png)
+
+We find ~60 blazar and ~60 pulsar sources that contain a combined probability $\geq 50%$ (from multiplying probabilities: prob_has_match, prob_this_match, and p_SOURCE_TYPE).
+![Ternary plot of source matches with a high probability across all three probability thresholds (prob_has_match, prob_this_match, and p_SOURCE_TYPE)](plots/ternary_plot_highest_prop_matches.png)
+
+
 ## Path 1 - Recreating Our State:
 ### Catalog Download & Generation 
 1. Download 8, 10, 12, 14, and 16yr fermi lats fits catalogs
-2. Download racs-low, tgss, vlass, nvss, sumss, spice-racs from specified locations* (linked to table BLANK in paper
-3. Download the WISE, PANSTARRS, GAIA Catalogs using the files in query_scripts** (** means very instensive
+2. Download racs-low, tgss, vlass, nvss, sumss, spice-racs from specified locations* (linked to table BLANK in paper)
+3. Download the WISE, PANSTARRS, GAIA Catalogs using the files in query_scripts** (** means very intensive)
 4. Use gaia_wise_pan_overlay.py to generate the overlapping catalogs of gaia, wise, and panstarr sources for a given fermi year between associated and unassociated sources
 5. Standardize all the comparisions catalogs (or a new comparision catalog outside of the aformentioned) using  catalog_prep.py  
 ### Catalog Overlap & Reduction

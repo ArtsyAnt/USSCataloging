@@ -362,7 +362,7 @@ def main(catalog_year ='14',match_type='mag-prior', prior_input = None,
         # TEMP
         ellipse['Source_Name'][1:] = ''
         # hardcoded skip so that we only focus on the smaller ellipse matches
-        if len(ellipse) > 450:
+        if len(ellipse) > 1000:
             continue
         # print(ellipse)
         # ellipse.remove_column('DEC_Counterpart')
@@ -517,6 +517,7 @@ def main(catalog_year ='14',match_type='mag-prior', prior_input = None,
                                 # Extract clean column header name from the file name
                                 # THIS CAN INCREASE DEPENDING ON YOUR FILE PATH BE WARY!
                                 col_name = prior_path.split('-', 3)[2]
+                                print(col_name)
                                 # print(col_name)
                                 if col_name in catalog.colnames:
                                     magnitude_columns_input.append((col_name, prior_path))
@@ -614,7 +615,6 @@ def main(catalog_year ='14',match_type='mag-prior', prior_input = None,
             for col in large_table.colnames:
                     large_table.rename_column(col, f"FERMI_{col}")
                     
-            
             final_tables_to_combine.append(large_table)
             # 2. Iterate through each catalog dictionary in your primed_tables list
             for i, table_dict in enumerate(primed_tables):
@@ -656,9 +656,7 @@ def main(catalog_year ='14',match_type='mag-prior', prior_input = None,
             # Safe conversion now that result is guaranteed to exist
             # so it stacks them all  like nway does!!
             catalog_path= catalog_reduced_dir + f'{match_type_path}/'+ f'{catalog_year}/'+ f'{source_name}_table_{len(FITS_TABLE)-1}_matches.fits'  
-
-            # # the absolute probability of a source is useless!
-            # FITS_TABLE['p_absolute'] = FITS_TABLE['prob_this_match']*FITS_TABLE['prob_has_match']
+            
             threshold = 1000000
             if len(FITS_TABLE) > threshold:
                 print(f'{len(FITS_TABLE)} exceeds writing threshold {threshold}, reduce to top X and bottom X matches')

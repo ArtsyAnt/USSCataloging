@@ -33,65 +33,92 @@ from sklearn.cluster import KMeans, HDBSCAN
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import log_loss
 import warnings 
+import pickle
+    
+
+columns_to_keep_reduced_wise_limited_associated  = [
+    'Signif_Avg', 'Pivot_Energy', 'Flux1000', 
+    'Energy_Flux100', 'SpectrumType', 'Npred', 'Variability_Index', 
+    'Frac_Variability',  'Signif_Peak', 'Flux_Peak',
+    'Unc_Flux_Peak', 'Time_Peak', 
+    'Peak_Interval',
+    'CLASS1', 'CLASS2', 'closest_flux_ratio',
+    'closest_spx_idx', 'CLASS1_rebinned',
+    'spx_idx_ratio', 'Photon_Index', 'Fermi_Flux_Density', 
+    'wise_wise_w1mpro',
+    'wise_wise_w1snr',            #snr could indicate maybe steepness? cause of noise factor
+    'wise_wise_w2mpro',          # W2 profile-fit magnitude
+    'wise_wise_w2snr',           # W2 profile-fit signal-to-noise ratio
+    'wise_wise_w3mpro',          # W3 profile-fit magnitude
+    'wise_wise_w3snr',           # W3 profile-fit signal-to-noise ratio
+    'wise_wise_w4mpro',          # W4 profile-fit magnitude
+    'wise_wise_w4snr',           # W4 profile-fit signal-to-noise ratio
+    
+    # color - color
+    'wise_wise_W1_W2_color','wise_wise_W2_W3_color', 
+    'wise_wise_W1_W4_color','wise_wise_W2_W4_color','wise_wise_W3_W4_color',
+    # adding all the other catalogs fluxes for a given match 
+    'FIRST_src1_FINT',
+    'FIRST_src1_FPEAK',
+                 
+    'VLASS_src1_Ftot',
+    'VLASS_src1_Fpeak',
+                 
+    'NVSS_src1_S1.4',    
+    'SUMSS_src1_St',
+                 
+    'TGSS_src1_Total_flux',
+    'TGSS_src1_Peak_flux',
+                 
+    'RACS_low_src1_total_flux',
+    'RACS_low_src1_peak_flux']
+
+label_order = ['Signif_Avg', 'Pivot_Energy', 'Flux1000', 'Energy_Flux100', 'Npred',
+       'Variability_Index', 'Frac_Variability', 'Signif_Peak', 'Flux_Peak',
+        'Time_Peak', 'Peak_Interval', 'closest_flux_ratio',
+       'closest_spx_idx', 'spx_idx_ratio', 'Photon_Index',
+       'Fermi_Flux_Density', 'WISE_w1mpro', 'WISE_w1snr', 'WISE_w2mpro',
+       'WISE_w2snr', 'WISE_w3mpro', 'WISE_w3snr', 'WISE_w4mpro', 'WISE_w4snr',
+       'WISE_W1_W2_color', 'WISE_W2_W3_color', 'WISE_W1_W4_color',
+       'WISE_W2_W4_color', 'WISE_W3_W4_color', 'FIRST_src1_FINT',
+       'FIRST_src1_FPEAK', 'VLASS_src1_Ftot', 'VLASS_src1_Fpeak',
+       'NVSS_src1_S1.4', 'SUMSS_src1_St', 'TGSS_src1_Total_flux',
+       'TGSS_src1_Peak_flux', 'RACS_low_src1_total_flux',
+       'SpectrumType']
 
 # reducing columns from the table 
-columns_to_keep_reduced_wise_limited_associated  = ['Signif_Avg', 'Pivot_Energy', 'Flux1000', 'Unc_Flux1000',
-                            'Energy_Flux100', 'Unc_Energy_Flux100', 'SpectrumType', 'Npred', 'Variability_Index', 'Frac_Variability', 'Unc_Frac_Variability', 'Signif_Peak', 'Flux_Peak', 'Unc_Flux_Peak', 'Time_Peak', 'Peak_Interval',
-                            'CLASS1', 'CLASS2', 'closest_flux_ratio', 'closest_spx_idx', 'CLASS1_rebinned',
-                            'spx_idx_ratio', 'Photon_Index', 'Photon_Index_Error', 'Fermi_Flux_Density', 'Fermi_Flux_Density_Error',
-
-                            'wise_wise_w1mpro','wise_wise_w1sigmpro',
-                            'wise_wise_w1snr','wise_wise_w1rchi2',
-                            'wise_wise_w2mpro',          # W2 profile-fit magnitude
-                            'wise_wise_w2sigmpro',       # W2 profile-fit magnitude uncertainty
-                            'wise_wise_w2snr',           # W2 profile-fit signal-to-noise ratio
-                            'wise_wise_w2rchi2',         # W2 profile-fit goodness-of-fit chi-squared
-                            
-                            'wise_wise_w3mpro',          # W3 profile-fit magnitude
-                            'wise_wise_w3sigmpro',       # W3 profile-fit magnitude uncertainty
-                            'wise_wise_w3snr',           # W3 profile-fit signal-to-noise ratio
-                            'wise_wise_w3rchi2',         # W3 profile-fit goodness-of-fit chi-squared
-                            
-                            'wise_wise_w4mpro',          # W4 profile-fit magnitude
-                            'wise_wise_w4sigmpro',       # W4 profile-fit magnitude uncertainty
-                            'wise_wise_w4snr',           # W4 profile-fit signal-to-noise ratio
-                            'wise_wise_w4rchi2',         # W4 profile-fit goodness-of-fit chi-squared
-                            
-                            'wise_wise_rchi2',           # Average goodness-of-fit chi-squared across all bands
-                            'wise_wise_nb',              # Number of components fit simultaneously to the source
-                            'wise_wise_na',              # Number of active pixels used in the profile fit
-                            # color - color
-                            'wise_wise_W1_W2_color','wise_wise_W2_W3_color', 'wise_wise_W1_W4_color','wise_wise_W2_W4_color','wise_wise_W3_W4_color']
-
-
-# reducing columns from the table 
-columns_to_keep_reduced_wise_limited  = ['Signif_Avg', 'Pivot_Energy', 'Flux1000', 'Unc_Flux1000',
-                            'Energy_Flux100', 'Unc_Energy_Flux100', 'SpectrumType', 'Npred', 'Variability_Index', 'Frac_Variability', 'Unc_Frac_Variability', 'Signif_Peak', 'Flux_Peak', 'Unc_Flux_Peak', 'Time_Peak', 'Peak_Interval',
-                            'closest_flux_ratio', 'closest_spx_idx',
-                            'spx_idx_ratio', 'Photon_Index', 'Photon_Index_Error', 'Fermi_Flux_Density', 'Fermi_Flux_Density_Error',
-
-                            'WISE_w1mpro','WISE_w1sigmpro',
-                            'WISE_w1snr','WISE_w1rchi2',
-                            'WISE_w2mpro',          # W2 profile-fit magnitude
-                            'WISE_w2sigmpro',       # W2 profile-fit magnitude uncertainty
-                            'WISE_w2snr',           # W2 profile-fit signal-to-noise ratio
-                            'WISE_w2rchi2',         # W2 profile-fit goodness-of-fit chi-squared
-                            
-                            'WISE_w3mpro',          # W3 profile-fit magnitude
-                            'WISE_w3sigmpro',       # W3 profile-fit magnitude uncertainty
-                            'WISE_w3snr',           # W3 profile-fit signal-to-noise ratio
-                            'WISE_w3rchi2',         # W3 profile-fit goodness-of-fit chi-squared
-                            
-                            'WISE_w4mpro',          # W4 profile-fit magnitude
-                            'WISE_w4sigmpro',       # W4 profile-fit magnitude uncertainty
-                            'WISE_w4snr',           # W4 profile-fit signal-to-noise ratio
-                            'WISE_w4rchi2',         # W4 profile-fit goodness-of-fit chi-squared
-                            
-                            'WISE_rchi2',           # Average goodness-of-fit chi-squared across all bands
-                            'WISE_nb',              # Number of components fit simultaneously to the source
-                            'WISE_na',              # Number of active pixels used in the profile fit
-                            # color - color
-                            'WISE_W1_W2_color','WISE_W2_W3_color', 'WISE_W1_W4_color','WISE_W2_W4_color','WISE_W3_W4_color']
+# columns_to_keep_reduced_wise_limited  = [
+#     'Signif_Avg', 'Pivot_Energy', 'Flux1000', 
+#     'Energy_Flux100', 'SpectrumType', 'Npred', 'Variability_Index', 'Frac_Variability',  'Signif_Peak', 'Flux_Peak',  'Time_Peak', 'Peak_Interval',
+#     'closest_flux_ratio', 'closest_spx_idx',
+#     'spx_idx_ratio', 'Photon_Index', 'Fermi_Flux_Density',
+#     'WISE_w1mpro',
+#     'WISE_w1snr',
+    
+#     'WISE_w2mpro',          # W2 profile-fit magnitude
+#     'WISE_w2snr',           # W2 profile-fit signal-to-noise ratio
+    
+#     'WISE_w3mpro',          # W3 profile-fit magnitude
+#     'WISE_w3snr',           # W3 profile-fit signal-to-noise ratio
+#     'WISE_w4mpro',          # W4 profile-fit magnitude
+#     'WISE_w4snr',           # W4 profile-fit signal-to-noise ratio
+    
+#     # color - color
+#     'WISE_W1_W2_color','WISE_W2_W3_color', 'WISE_W1_W4_color','WISE_W2_W4_color','WISE_W3_W4_color', 
+#     'FIRST_src1_FINT',
+#     'FIRST_src1_FPEAK',
+                 
+#     'VLASS_src1_Ftot',
+#     'VLASS_src1_Fpeak',
+                 
+#     'NVSS_src1_S1.4',    
+#     'SUMSS_src1_St',
+                 
+#     'TGSS_src1_Total_flux',
+#     'TGSS_src1_Peak_flux',
+                 
+#     'RACS_low_src1_total_flux',
+#     'RACS_low_src1_peak_flux']
 
 # overlay a bar chart of the base associated sources with the unassociated source distribution!
 def bar_overlay(associated_data, top_unassociated_data, worst_unassociated_data, rebin_type,figname=None):
@@ -364,7 +391,9 @@ def main(fermi_source=None, rebin_type='4'):
     catalog_names = ['FERMI', 'WISE', 'RACS_low', 'TGSS', 'SUMSS', 'FIRST', 'VLASS']
     print('=== SETTING UP UNASSOCIATED & ASSOCIATED CATALOG ===')
     # setting up catalog: same process as associated counterpart
+    # fermi_list_14yr_done = QTable.read(catalog_reduced_dir + 'mag_prior_all_nway_matches/14/all_top_tables_stacked_probabilites.fits', format='fits')
     fermi_list_14yr_done = QTable.read(catalog_reduced_dir + 'mag_prior_all_nway_matches/14/all_top_tables_stacked_probabilites.fits', format='fits')
+
     fermi_list_14yr_associated = QTable.read(catalog_reduced_dir + '14yr_associated_ellipses_all_srcs_gaia_wise.fits', format='fits')
 
 
@@ -395,12 +424,13 @@ def main(fermi_source=None, rebin_type='4'):
         if col.startswith('FERMI_'):
             fermi_list_14yr_done.rename_column(col, col[len('FERMI_'):])
             
-    
-    valid_values = fermi_list_14yr_done[
-        np.isfinite(fermi_list_14yr_done['closest_spx_idx']) &
-        np.isfinite(fermi_list_14yr_done['closest_flux_ratio'])]
-    
-    valid_values_associated =  fermi_list_14yr_associated[~fermi_list_14yr_associated['closest_spx_idx'].mask]
+    # unassociated
+    valid_values = fermi_list_14yr_done
+    valid_values = valid_values[valid_values['closest_spx_idx'] != np.inf]
+    valid_values = valid_values[valid_values['closest_flux_ratio'] != np.inf]
+
+    # associated 
+    valid_values_associated =  fermi_list_14yr_associated
     valid_values_associated = valid_values_associated[valid_values_associated['closest_flux_ratio'] != np.inf]
     
     radio_alphas = []
@@ -444,51 +474,69 @@ def main(fermi_source=None, rebin_type='4'):
         fermi_flux_densities.append(fermi_flux_density)
         fermi_flux_density_uncertanties.append(fermi_flux_density_uncertanty)
 
-    
-    
     # redone of the fermi_alphas 
     # spectral index ratio
-    valid_values['spx_idx_ratio'] = valid_values['closest_spx_idx']/valid_values['closest_spx_idx']
     valid_values['Photon_Index'] = fermi_alphas
+    valid_values['spx_idx_ratio'] = valid_values['closest_spx_idx']/valid_values['Photon_Index']
     valid_values['Photon_Index_Error'] = fermi_alphas_uncertainties
     valid_values['Fermi_Flux_Density'] = fermi_flux_densities
     valid_values['Fermi_Flux_Density_Error'] = fermi_flux_density_uncertanties
-    
-    
     # wise color subtracting 
     valid_values['WISE_W1_W2_color'] = valid_values['WISE_w1mpro'] - valid_values['WISE_w2mpro']
     valid_values['WISE_W2_W3_color'] = valid_values['WISE_w2mpro'] - valid_values['WISE_w3mpro']
-    
-    
     valid_values['WISE_W1_W4_color'] = valid_values['WISE_w1mpro'] - valid_values['WISE_w4mpro']
     valid_values['WISE_W2_W4_color'] = valid_values['WISE_w2mpro'] - valid_values['WISE_w4mpro']
     # 2. Cool dust component diagnostic
     valid_values['WISE_W3_W4_color'] = valid_values['WISE_w3mpro'] - valid_values['WISE_w4mpro']
-    
-    # print current size of unassociated sources 
-    print(f'valid sources: {len(valid_values)}')    
 
-    prepreprocessed_valid_values = valid_values[columns_to_keep_reduced_wise_limited].copy()
+
+    print('reordering columns to match xgboost model')
+    prefixes = ['FIRST_', 'VLASS_', 'NVSS_', 'SUMSS_', 'TGSS_', 'RACS_low_']
+    for col in list(valid_values.colnames):
+        for p in prefixes:
+            # If the column matches a survey prefix but doesn't have src1 yet
+            if col.startswith(p) and 'src1' not in col:
+                new_col = col.replace(p, f"{p}src1_", 1)
+                valid_values.rename_column(col, new_col)
+                break
+
+    prepreprocessed_valid_values =  valid_values[label_order].copy()
     prepreprocessed_valid_values = prepreprocessed_valid_values.to_pandas()
     
+    rebin_label = '_3_labels'   # must match exactly what decision_tree.py used when saving
+
+    with open('pulsar_scaler' + rebin_label + '.pkl', 'rb') as f:
+        scaler = pickle.load(f)
+    with open('pulsar_spectrumtype_encoder' + rebin_label + '.pkl', 'rb') as f:
+        spectrumtype_encoder = pickle.load(f)
+
+        
     labels_to_covert =['SpectrumType']
     for label in labels_to_covert:
-        label_coding = LabelEncoder()
+        # commented out 9/28/2026
+        # label_coding = LabelEncoder()
+
+        label_coding = spectrumtype_encoder
         convert = label_coding.fit_transform(prepreprocessed_valid_values[label])
         prepreprocessed_valid_values[f'converted_{label}'] = convert
         
     prepreprocessed_valid_values = prepreprocessed_valid_values.drop(columns=labels_to_covert)
     # no other splitting just making is standard to get evaluated!
     data_preprocessed = prepreprocessed_valid_values.replace({np.inf: np.nan, -np.inf: np.nan})
-    data_preprocessed = data_preprocessed.fillna(data_preprocessed.median(numeric_only=True))
+    # data_preprocessed = data_preprocessed.fillna(data_preprocessed.median(numeric_only=True))
     # col_names = data_preprocessed.columns
     '================================================================================'
-    scaler = StandardScaler()
-    data_preprocessed_scaled = scaler.fit_transform(data_preprocessed)
+    # scaler = StandardScaler()
+    # data_preprocessed_scaled = scaler.fit_transform(data_preprocessed)
+
+
+
+    
+    data_preprocessed_scaled = scaler.transform(data_preprocessed)  # transform, not fit_transform
 
     print('=== CALLING XGBOOST MODEL ===')
-    xgboost_path_3label = catalog_base_dir + 'best_xgb_model_3_labels.json'
-    xgboost_path_4label = catalog_base_dir + 'best_xgb_model_4_labels.json'
+    xgboost_path_3label = catalog_base_dir + 'pulsar_best_xgb_model_3_labels_backup.json'
+    xgboost_path_4label = catalog_base_dir + 'pulsar_best_xgb_model_4_labels.json'
     xgboost_model_3label = xgb.XGBClassifier()
     xgboost_model_3label.load_model(xgboost_path_3label)
     xgboost_model_4label = xgb.XGBClassifier()
@@ -571,12 +619,13 @@ def main(fermi_source=None, rebin_type='4'):
             probability_column_name = (
                 prefix + '_' + decoded_class + '_prob'
             )
-    
             valid_values[probability_column_name] = (
                 pred_model_all_probabilities[:, probability_column_idx]
             )
         print(f'{prefix} decoded classes: {list(class_map.values())}')
-        
+
+    # all_matches_table.write(catalog_reduced_dir + 'mag_prior_all_nway_matches/14/all_stacked_matches_xgmodeled.fits', format='fits', overwrite=True)
+    # print('all matched writing complete!')
     # split the unassociated sources between the top and worst match
     top_matches_list = []
     worst_matches_list = []
@@ -604,7 +653,7 @@ def main(fermi_source=None, rebin_type='4'):
     top_match_table.write(catalog_reduced_dir + 'mag_prior_all_nway_matches/14/top_stacked_matches_xgmodeled.fits', format='fits', overwrite=True)
     worst_match_table.write(catalog_reduced_dir + 'mag_prior_all_nway_matches/14/worst_stacked_matches_xgmodeled.fits', format='fits', overwrite=True)
     
-    print('writing complete!')
+    print('top-worst writing complete!')
 
 
 # - will generate a barchart that overlays the unassociated source probabilites to the unassociated sources

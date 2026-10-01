@@ -50,21 +50,65 @@ def main(match_type='mag-prior', top_x_matches = None, skip_existing_cats=False)
         print(f'====Top Probability Read on {cat_year}-Yr-Fermi Catalog====')
         # base dir
             
-        all_paths = glob.glob(catalog_nway_matches + match_name + cat_year + '/*.fits')
+        all_paths = glob.glob(catalog_nway_matches + match_name + cat_year + '/4FGL*.fits')
         # initiate all the files (takes a long time)
         # take the top p_i and p_any of each catalog and stack them into a new catalog for the fermi_ellipse
         all_top_tables = []
+        all_tables_no_change     = [] 
         start_time = time.monotonic()
         total_table_idx = len(all_paths)
         last_report = start_time
+
+        # i=0
         for path_idx,  path in enumerate(all_paths):
+            # if i == 100:
+            #     break
+            # i+=1
             table = Table.read(path, format = 'fits')
-            # absolute is not a good metric  
-            # mask out only the top matches 
-            # TODO: ADD SO IT IS THE TOP THREE right now gets the top and worse match 
+            # the current path to get the sources names from the file names
+            name = path.split('/')[10]
+            name = name.split('_')[0]
+            print(name)
+            print('wow')
+            print()
+            # want to have all tables stacked no changes 
+            all_tables_no_change.append(table)
+            # only consider sources that are not just the fermi ellipse those are just not correct and a weird bug in my code
+            # if no other sources then just skip
+            try:
+                table = table[table['ncat'] != 1]
+            except:
+                continue
+
+            # table['FERMI_Source_Name'] = name
+
+            # max_p_any_prob = max(table['prob_has_match'])
+            # min_p_any_prob = min(table['prob_has_match'])
+
+            # top_table = table[table['prob_has_match'] == max_p_any_prob]
+            # worst_table = table[table['prob_has_match'] == min_p_any_prob]
+
+            
+            # top_match_idx = np.argmax(top_table['prob_this_match'])
+            # worst_match_idx  = np.argmin(worst_table['prob_this_match'])
+
+            # top_table = top_table[top_match_idx]
+            # worst_table = worst_table[worst_match_idx]
+
+ 
+
+            # # create a new table from that sublist 
+            # table = (Table[top_table], Table[worst_table])
+            # # print(top_table['prob_has_match', 'prob_this_match', 'FERMI_Source_Name'])
+
+            
+            # all_top_tables.append(table)
+            
+
             max_p_any_prob = max(table['prob_has_match'])
             table = table[table['prob_has_match'] == max_p_any_prob]
-    
+            table['FERMI_Source_Name'] = name    
+            
             # do arg max of the p_i
             # make the argmax the top and the lowest one
             max_props_idx = np.argmax(table['prob_this_match'])
@@ -72,8 +116,10 @@ def main(match_type='mag-prior', top_x_matches = None, skip_existing_cats=False)
 
             # create a new table from that sublist 
             table = Table(table[[max_props_idx, min_props_idx]])
+            # print(table['FERMI_Source_Name'])
             all_top_tables.append(table)
 
+            # Time-based progress reporting instead of every-100 index checkpoin
             # Time-based progress reporting instead of every-100 index checkpoints
             now = time.monotonic()
             if now - last_report >= 5:
@@ -82,6 +128,7 @@ def main(match_type='mag-prior', top_x_matches = None, skip_existing_cats=False)
                 print(f"Cross-Matched: {path_idx + 1}/{total_table_idx} sources "
                           f"({rate:.1f} sources/s, {elapsed:.0f}s elapsed)...")
                 last_report = now
+        
     
             
         print(f"\nmax & min table sorting complete in {time.monotonic() - start_time:.0f}s. ")
@@ -89,12 +136,22 @@ def main(match_type='mag-prior', top_x_matches = None, skip_existing_cats=False)
         all_top_tables_stacked = vstack(all_top_tables)
         print(len(all_top_tables_stacked.colnames))
         print()
+        print(all_top_tables_stacked.colnames)
 
         all_top_tables_stacked.remove_columns(cols_to_remove)
+        print()
         print(len(all_top_tables_stacked.colnames))
+        print(all_top_tables_stacked.colnames)
 
+        
         all_top_tables_stacked.write(catalog_nway_matches + match_name + cat_year +'/all_top_tables_stacked_probabilites.fits', format='fits', overwrite=True)
-        print('Writing complete')
+        print('Top - Worst  Writing complete')
+
+        
+        all_tables_no_change_stacked = vstack(all_tables_no_change)
+        all_tables_no_change_stacked.remove_columns(cols_to_remove)
+        all_tables_no_change_stacked.write(catalog_nway_matches + match_name + cat_year +'/all_tables_no_limit_stacked_probabilites.fits', format='fits', overwrite=True)
+        print('Full Table Writing complete')
 
         # all_top_tables_stacked_across_years.append(all_top_tables_stacked)
         
@@ -103,4 +160,4 @@ def main(match_type='mag-prior', top_x_matches = None, skip_existing_cats=False)
 
     
 if __name__ == '__main__':
-    main(skip_existing_cats=True)
+    main(skip_existing_cats=False)

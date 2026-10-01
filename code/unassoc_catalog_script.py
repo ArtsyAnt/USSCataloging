@@ -442,15 +442,17 @@ def process_single_fermi(ellipse_index, fermi_catalog_sliced, global_dict_indexe
         
         # then append the rest of the valid sources in it 
         for cat_base, rows in catalog_groups.items():
-            if cat_base == 'WISE':
-                # print(rows)
-                grouped_dict.append(rows)
-            # cat in a list for a empty valid_spx_rows_skip it
-            valid_spx_rows = [r for r in rows if not np.isnan(r['spectral_index'])]
-            if not valid_spx_rows:
-                continue
+            # removed since we are not using this as a hard limit anymore! - 9/28/2026
+            # if cat_base == 'WISE':
+            #     # print(rows)
+            #     grouped_dict.append(rows)
+            # # cat in a list for a empty valid_spx_rows_skip it
+            # valid_spx_rows = [r for r in rows if not np.isnan(r['spectral_index'])]
+            # if not valid_spx_rows:
+            #     continue
+            # grouped_dict.append(valid_spx_rows)
 
-            grouped_dict.append(valid_spx_rows)
+            grouped_dict.append(rows)
 
 
         return grouped_dict
